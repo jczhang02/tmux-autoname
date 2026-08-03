@@ -201,6 +201,17 @@ describe("CLI daemon lifecycle", () => {
 		);
 	});
 
+	test("an idempotent start stays quiet", async () => {
+		const server = createServer();
+		expect((await cli(server, "start")).exitCode).toBe(0);
+		expect(
+			await waitFor(() => daemonPidsFor(server.socketPath, server.pid).length === 1),
+		).toBe(true);
+
+		const repeated = await cli(server, "start");
+		expect(repeated).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+	});
+
 	test("idle daemon exits promptly after its tmux server disappears", async () => {
 		const server = createServer();
 		expect((await cli(server, "start")).exitCode).toBe(0);

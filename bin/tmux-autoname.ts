@@ -151,7 +151,6 @@ async function startDaemon(): Promise<void> {
 	const identity = requireServer();
 	const initial = readDaemonStatus(tmux, identity, BUILD);
 	if (initial.state === "running") {
-		console.log(`tmux-autoname already running pid=${initial.record.pid}`);
 		return;
 	}
 	if (initial.state === "outdated") {
