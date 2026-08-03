@@ -1,0 +1,20 @@
+# LLM naming is opt-in because it sends terminal data to a provider.
+# There is no automatic secret redaction. Read README.md before enabling it.
+[llm]
+enabled = false
+provider = "openai-codex"
+model = "gpt-5.4-mini"
+thinking = "off"
+timeout_seconds = 45
+
+[naming]
+max_len = 24
+poll_seconds = 30
+min_non_empty_lines = 5
+head_lines = 120
+tail_lines = 120
+
+[tools]
+ai = ["pi", "claude"]
+shells = ["bash", "zsh", "fish", "sh"]
+editors = ["nvim", "vim", "vi"]

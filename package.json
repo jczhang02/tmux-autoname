@@ -1,0 +1,25 @@
+{
+  "name": "tmux-autoname",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "start": "bun bin/tmux-autoname.ts start",
+    "stop": "bun bin/tmux-autoname.ts stop",
+    "status": "bun bin/tmux-autoname.ts status",
+    "daemon": "bun bin/tmux-autoname.ts daemon",
+    "once": "bun bin/tmux-autoname.ts once",
+    "reset-current": "bun bin/tmux-autoname.ts reset-current",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun test && shellcheck tmux-autoname.tmux"
+  },
+  "bin": {
+    "tmux-autoname": "bin/tmux-autoname.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2"
+  }
+}
