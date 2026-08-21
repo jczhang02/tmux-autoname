@@ -5,6 +5,7 @@ import {
   buildScopeCandidates,
   deterministicScope,
   evidenceFingerprint,
+  isGroundedScope,
   isMeaningfulCommand,
   normalizeActivity,
   renderName,
@@ -77,6 +78,8 @@ type RuntimeWindowState = PersistedWindowState & {
   lastProfile: string;
   badgeStyle: BadgeStyle;
   badgeState: BadgeState;
+  badgeSynced: boolean;
+  pluginNames: string[];
   lastCallAt?: number;
   callTimes: number[];
   pendingTimer?: unknown;
@@ -104,7 +107,9 @@ export type ExplainReport = {
   lastError?: string;
   limits: {
     windowCallsLastHour: number;
+    windowCallLimit: number;
     serverCallsLastHour: number;
+    serverCallLimit: number;
     circuitOpenUntil?: number;
   };
 };
@@ -149,13 +154,22 @@ export class AutonameRuntime {
       return { kind: "ignored", windowId: event.windowId ?? "unknown", reason: "missing_window" };
     }
 
-    const previous = this.#queues.get(snapshot.windowId) ?? Promise.resolve({
+    const queued = this.#queues.get(snapshot.windowId);
+    const previous = queued ?? Promise.resolve({
       kind: "ignored" as const,
       windowId: snapshot.windowId,
     });
     const next = previous
       .catch(() => ({ kind: "failed" as const, windowId: snapshot.windowId }))
-      .then(() => this.#handleLocked(event, snapshot));
+      .then(async (): Promise<RuntimeOutcome> => {
+        if (!queued) return this.#handleLocked(event, snapshot);
+        try {
+          const current = await this.#tmux.snapshot({ windowId: snapshot.windowId });
+          return this.#handleLocked(event, current);
+        } catch {
+          return { kind: "ignored", windowId: snapshot.windowId, reason: "missing_window" };
+        }
+      });
     this.#queues.set(snapshot.windowId, next);
     void next.finally(() => {
       if (this.#queues.get(snapshot.windowId) === next) this.#queues.delete(snapshot.windowId);
@@ -179,7 +193,9 @@ export class AutonameRuntime {
       },
       limits: {
         windowCallsLastHour: state.callTimes.length,
+        windowCallLimit: this.#config.limits.max_calls_per_window_hour,
         serverCallsLastHour: this.#serverCallTimes.length,
+        serverCallLimit: this.#config.limits.max_calls_per_server_hour,
         ...(this.#circuitOpenUntil ? { circuitOpenUntil: this.#circuitOpenUntil } : {}),
       },
       ...(state.record ? { record: state.record } : {}),
@@ -193,6 +209,13 @@ export class AutonameRuntime {
 
   clearCredential(): void {
     this.#model?.clearCredential();
+  }
+
+  async resetFailures(): Promise<void> {
+    this.clearCredential();
+    this.#consecutiveFailures = 0;
+    this.#circuitOpenUntil = undefined;
+    await this.#saveServer();
   }
 
   shutdown(): void {
@@ -210,17 +233,13 @@ export class AutonameRuntime {
     const state = this.#stateFor(snapshot);
     state.lastProfile = snapshot.displayProfile ?? this.#config.display.profile;
     state.badgeStyle = snapshot.badgeStyle ?? state.badgeStyle;
+    if (!state.badgeSynced) {
+      state.badgeSynced = true;
+      await this.#setBadge(snapshot.windowId, state, state.badgeState);
+    }
 
     if (event.kind === "manual_name_changed") {
       return this.#handleManual(event, snapshot, state);
-    }
-
-    if (
-      state.lastAppliedName !== undefined &&
-      snapshot.windowName !== state.lastAppliedName &&
-      snapshot.windowName !== state.manualName
-    ) {
-      return this.#enterManual(snapshot, state, snapshot.windowName);
     }
 
     const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
@@ -242,7 +261,7 @@ export class AutonameRuntime {
       state.revision += 1;
       state.record = {
         scope: firstRecord || scopeChanged ? localScope : state.record?.scope ?? localScope,
-        task: state.record?.task ?? "",
+        task: scopeChanged ? "" : state.record?.task ?? "",
         activity,
       };
       if (firstRecord || scopeChanged) state.provenance = "fallback";
@@ -318,6 +337,10 @@ export class AutonameRuntime {
       terminalContext,
     );
     const revision = state.revision;
+    if (forced) {
+      await this.#save(snapshot.windowId, state);
+      return this.#infer(snapshot.windowId, revision, fingerprint, request, true);
+    }
     state.pendingTimer = this.#clock.setTimeout(() => {
       state.pendingTimer = undefined;
       void this.#infer(snapshot.windowId, revision, fingerprint, request, forced);
@@ -340,6 +363,7 @@ export class AutonameRuntime {
       windowId: snapshot.windowId,
       revision: state.revision,
       fingerprint: state.fingerprint ?? "",
+      structureFingerprint: evidenceFingerprint(snapshot, candidates, ""),
       ...(state.record ? { previous: state.record } : {}),
       ...(state.provenance ? { previousProvenance: state.provenance } : {}),
       activity,
@@ -360,18 +384,25 @@ export class AutonameRuntime {
     fingerprint: string,
     request: NameRequest,
     forced: boolean,
-  ): Promise<void> {
+  ): Promise<RuntimeOutcome> {
     const state = this.#states.get(windowId);
-    if (!state || state.mode !== "automatic") return;
-    if (state.revision !== revision || state.fingerprint !== fingerprint) return;
-    if (!(await this.#currentSnapshot(request))) return;
+    if (!state) return { kind: "ignored", windowId, reason: "missing_window" };
+    if (state.mode !== "automatic") {
+      return { kind: "manual", windowId, name: state.manualName };
+    }
+    if (state.revision !== revision || state.fingerprint !== fingerprint) {
+      return { kind: "ignored", windowId, reason: "superseded" };
+    }
+    if (!(await this.#currentSnapshot(request))) {
+      return { kind: "ignored", windowId, reason: "evidence_changed" };
+    }
 
     const now = this.#clock.now();
     const blocked = this.#blockedReason(state, now, forced);
     if (blocked) {
       state.lastError = blocked;
       await this.#setBadge(windowId, state, "failed");
-      return;
+      return { kind: "ignored", windowId, reason: blocked };
     }
 
     state.callTimes.push(now);
@@ -397,7 +428,7 @@ export class AutonameRuntime {
         current.revision !== revision ||
         current.fingerprint !== fingerprint
       ) {
-        return;
+        return { kind: "ignored", windowId, reason: "superseded" };
       }
 
       const record = acceptProposal(
@@ -414,11 +445,19 @@ export class AutonameRuntime {
       this.#circuitOpenUntil = undefined;
       await this.#saveServer();
       await this.#applyRecord(liveSnapshot, current);
+      if (current.lastError === "tmux_write_failed") {
+        return { kind: "failed", windowId, reason: current.lastError };
+      }
       await this.#setBadge(windowId, current, "healthy");
+      return { kind: "applied", windowId, name: current.lastAppliedName };
     } catch (error) {
       const current = this.#states.get(windowId);
-      if (!current || current.revision !== revision || current.mode !== "automatic") return;
-      if (controller.signal.aborted && current.fingerprint !== fingerprint) return;
+      if (!current || current.revision !== revision || current.mode !== "automatic") {
+        return { kind: "ignored", windowId, reason: "superseded" };
+      }
+      if (controller.signal.aborted && current.fingerprint !== fingerprint) {
+        return { kind: "ignored", windowId, reason: "superseded" };
+      }
 
       const secretFailure =
         error instanceof SecretUnavailableError || error instanceof ProviderAuthenticationError;
@@ -434,6 +473,7 @@ export class AutonameRuntime {
         current,
         secretFailure ? "secret_unavailable" : "failed",
       );
+      return { kind: "failed", windowId, reason: current.lastError };
     } finally {
       this.#clock.clearTimeout(timeout);
       const current = this.#states.get(windowId);
@@ -447,7 +487,7 @@ export class AutonameRuntime {
     state: RuntimeWindowState,
   ): Promise<RuntimeOutcome> {
     const requested = event.manualName ?? snapshot.windowName;
-    if (requested === state.lastAppliedName) {
+    if (requested === state.lastAppliedName || state.pluginNames.includes(requested)) {
       return { kind: "ignored", windowId: snapshot.windowId, reason: "plugin_rename" };
     }
     if (requested === "") {
@@ -497,6 +537,7 @@ export class AutonameRuntime {
       }
     }
     const candidates = buildScopeCandidates(snapshot);
+    const localScope = deterministicScope(candidates);
     const persisted = snapshot.persisted;
     const state: RuntimeWindowState = {
       mode: persisted?.mode ?? "automatic",
@@ -505,10 +546,16 @@ export class AutonameRuntime {
       ...(persisted?.provenance ? { provenance: persisted.provenance } : {}),
       ...(persisted?.manualName ? { manualName: persisted.manualName } : {}),
       ...(persisted?.lastAppliedName ? { lastAppliedName: persisted.lastAppliedName } : {}),
-      lastLocalScope: scopeKey(deterministicScope(candidates)),
+      lastLocalScope: scopeKey(
+        persisted?.record && !isGroundedScope(persisted.record.scope, candidates)
+          ? persisted.record.scope
+          : localScope,
+      ),
       lastProfile: snapshot.displayProfile ?? this.#config.display.profile,
       badgeStyle: snapshot.badgeStyle ?? "plain",
       badgeState: persisted?.mode === "manual" ? "manual" : "healthy",
+      badgeSynced: false,
+      pluginNames: persisted?.lastAppliedName ? [persisted.lastAppliedName] : [],
       callTimes: [...(persisted?.callTimes ?? [])],
       ...(persisted?.lastCallAt !== undefined ? { lastCallAt: persisted.lastCallAt } : {}),
     };
@@ -561,6 +608,10 @@ export class AutonameRuntime {
     const name = renderName(state.record, state.lastProfile);
     if (!name) return;
     state.lastAppliedName = name;
+    if (!state.pluginNames.includes(name)) {
+      state.pluginNames.push(name);
+      if (state.pluginNames.length > 4) state.pluginNames.shift();
+    }
     await this.#save(snapshot.windowId, state);
     if (snapshot.windowName === name) return;
     try {
@@ -631,14 +682,8 @@ export class AutonameRuntime {
       if (snapshot.serverId !== request.serverId || snapshot.windowId !== request.windowId) {
         return undefined;
       }
-      const fingerprint = evidenceFingerprint(
-        snapshot,
-        buildScopeCandidates(snapshot),
-        await this.#tmux.capturePane(
-          (snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0])?.id ?? "",
-        ),
-      );
-      return fingerprint === request.fingerprint ? snapshot : undefined;
+      const fingerprint = evidenceFingerprint(snapshot, buildScopeCandidates(snapshot), "");
+      return fingerprint === request.structureFingerprint ? snapshot : undefined;
     } catch {
       return undefined;
     }
@@ -650,7 +695,9 @@ const safeErrorCode = (error: unknown): string => {
   if (error instanceof ProviderAuthenticationError) return "provider_authentication_failed";
   if (error instanceof Error) {
     if (error.name === "AbortError" || error.message === "model_timeout") return "model_timeout";
-    if (error.message === "invalid_model_proposal") return error.message;
+    if (["invalid_model_proposal", "invalid_model_response"].includes(error.message)) {
+      return error.message;
+    }
   }
   return "model_failed";
 };

@@ -56,6 +56,7 @@ describe("event integrations", () => {
     const monitor = new ContentMonitor({
       tmux: {
         activePanes: async () => ["%42"],
+        paneSignals: async () => [{ paneId: "%42", signature: "zsh\0/tmp" }],
         capturePane: async () => content,
       },
       settleMs: 1000,
@@ -86,6 +87,39 @@ describe("event integrations", () => {
     expect(settled).toHaveLength(2);
     await monitor.scan(6000);
     expect(settled).toHaveLength(3);
+  });
+
+  test("content monitor reconciles every pane from metadata without capturing inactive panes", async () => {
+    let signature = "zsh\0/work";
+    const changed: string[] = [];
+    const captures: string[] = [];
+    const monitor = new ContentMonitor({
+      tmux: {
+        activePanes: async () => ["%1"],
+        paneSignals: async () => [
+          { paneId: "%1", signature: "zsh\0/active" },
+          { paneId: "%2", signature },
+        ],
+        capturePane: async (paneId) => {
+          captures.push(paneId);
+          return "screen";
+        },
+      },
+      settleMs: 1000,
+      onChanged: async (paneId) => {
+        changed.push(paneId);
+        return { kind: "ignored", windowId: "@1" } satisfies RuntimeOutcome;
+      },
+      onSettled: async () => ({ kind: "ignored", windowId: "@1" }),
+    });
+
+    await monitor.scan(0);
+    await monitor.scan(100);
+    signature = "codex\0/work";
+    await monitor.scan(200);
+
+    expect(changed).toEqual(["%1", "%2", "%2"]);
+    expect(captures).toEqual(["%1", "%1", "%1"]);
   });
 });
 

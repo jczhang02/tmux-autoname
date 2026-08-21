@@ -77,6 +77,7 @@ Task 始终使用简洁的英文动作短语：由 2 至 5 个小写单词组成
 - 使用一个小型 TPM shell loader 完成安装和 tmux hook 配置。
 - 每个 tmux server 运行一个 daemon。
 - 使用 `XDG_RUNTIME_DIR` 下的 Unix socket 传递本地事件。
+- daemon ping 携带 build identity；launcher 在发送事件前替换旧 build 的 daemon。
 
 正式构建必须关闭 Bun 对 `.env` 与 `bunfig.toml` 的运行时自动加载：
 
@@ -121,10 +122,11 @@ tmux hook、有界屏幕监控与 shell 事件
 daemon 内部封装事件合并、snapshot 收集、进程检查、候选项生成、模型调用、
 revision 防陈旧结果、手动所有权、渲染、凭据缓存和 tmux 写入。
 
-实现使用 tmux hook、可选 shell 事件，以及对已连接 client 当前可见 pane 的低频
-监控。渲染屏幕在 settle 时段内保持不变后，运行时为一次推理最多抓取 50 行、
-8 KiB。实现不使用 tmux control mode，不流式读取 pane 输出，也不安装 Agent
-extension。
+实现使用 tmux hook、可选 shell 事件和低频监控。轻量的进程/路径信号覆盖所有
+pane，使非活动 window 在 daemon 启动和进程变化后也能收敛；只有已连接 client
+当前可见的 pane 会被抓取渲染文本。屏幕在 settle 时段内保持不变后，运行时为
+一次推理最多抓取 50 行、8 KiB。实现不使用 tmux control mode，不流式读取 pane
+输出，也不安装 Agent extension。
 
 ## 7. 证据优先级
 
@@ -152,14 +154,16 @@ Activity 由活动 pane 决定。其他 pane 可以提供 Scope 与 Task 的辅�
 - 活动 pane 和辅助 pane 的 cwd；
 - git/worktree root；
 - 远程主机身份；
-- 稳定的公共祖先目录；
-- session 内不同 window 之间最短且可区分的路径后缀。
+- 稳定的公共祖先目录。
 
-session name 只是上下文，不会自动成为 Workspace。原始 cwd 只是证据，也不会
-自动成为 Scope。
+当 session 起始目录的 basename 与 session name 一致，且该目录包含活动 cwd 时，
+它才被信任为 Workspace。这样可保留 `sesh` 创建的 `partjobs` 等项目容器。否则，
+优先使用活动 pane 的 Git/worktree root，避免通用的 `$HOME` session path 产生
+`project/dev/project`。session name 与原始 cwd 仍只是证据，不会自动成为 Scope。
 
 每个候选项都包含不透明 ID、label、kind，以及有事实依据的路径或主机信息。
-AI 可以选择候选 ID，但不能返回任意路径。
+每个 Area 候选项都绑定一个 Workspace ID。AI 只能选择兼容的候选 ID，不能返回
+任意路径或把一个 Workspace 的 Area 配给另一个 Workspace。
 
 输入示例：
 
@@ -213,6 +217,9 @@ type SemanticEventKind =
 - Scope 与 Task 仍然有效时，仅 Activity 发生变化；
 - evidence fingerprint 没有变化。
 
+fingerprint 归一化会忽略重复的 prompt 重绘和低信息量 shell 装饰，但不会改变
+实际发送给模型的有界终端证据。
+
 初始内部默认值：
 
 ```text
@@ -221,7 +228,7 @@ active-pane scan          3000 ms
 content settle            4000 ms
 minimum call interval   10000 ms per window
 in-flight requests      1 per window
-request timeout         4000 ms
+request timeout        15000 ms
 automatic model retries 0
 automatic calls          每个 window 每小时 6 次
 automatic calls          每个 tmux server 每小时 30 次
@@ -230,7 +237,8 @@ failure circuit cooldown 10 分钟
 ```
 
 强制刷新可以绕过 fingerprint 去重与最短调用间隔，但不能绕过手动所有权、请求
-校验、每小时额度或熔断器。所有 provider 请求都计入同一套额度。当额度或熔断器
+校验、每小时额度或熔断器。命令会等待最终的 applied/failed/blocked 结果，而不是
+只返回 scheduled。所有 provider 请求都计入同一套额度。当额度或熔断器
 阻止推理时，继续使用最近一次有效名称或确定性 fallback 名称。
 
 ## 11. AI 请求与结果
@@ -271,11 +279,12 @@ const NameProposalSchema = z.object({
 AI 永远不直接返回最终渲染的 window name。
 
 **Token 与成本范围。** Token 数取决于 provider 与模型 tokenizer，不是协议保证。
-在本地 AI SDK 传输测试中，典型证据 prompt 为 1,449 UTF-8 字节，估算约
-400-700 个输入 token；完整 8 KiB 终端上下文 fixture 生成 9,517 字节 prompt，
-估算约 2,500-5,000 个输入 token。候选项与路径数据长度会变化，provider 也可能
-单独计算结构化输出 schema。模型输出上限为 64 token。按每个 window 默认额度，
-典型上限估算为每小时 2,400-4,200 个输入 token；若每次抓取都接近上限，则约为
+在本地 AI SDK 传输测试中，典型证据 prompt 估算约 250-500 个输入 token；完整
+8 KiB 终端上下文估算约 2,500-5,000 个输入 token。候选项、路径长度与 provider
+计费方式会变化。模型输出上限为 512 token，以便带推理能力的 compatible 模型
+完成生成；小型 JSON 对象生成后即停止，因此上限不等于固定消耗。按每个 window
+默认额度，典型上限估算为每小时 1,500-3,000 个输入 token；若每次抓取都接近
+上限，则约为
 15,000-30,000 个输入 token。
 
 ## 12. 状态与陈旧结果隔离
@@ -404,6 +413,7 @@ provider 与 model 都是必填配置。插件不提供隐式 provider、默认 
 - 第一次模型调用时才延迟解析。
 - 在当前 daemon session 的内存中缓存。
 - daemon 退出、显式重新加载密钥，或 provider 返回 401/403 时清除。
+- 显式重新加载密钥会关闭认证失败熔断，但保留每小时调用时间戳与额度。
 - 解析后的值绝不能写入 tmux option、argv、日志、状态文件、prompt 或崩溃报告。
 - 后台解析不得打开交互式终端密码提示。解析失败时显示密钥不可用徽标，等待
   用户显式重试。
@@ -413,9 +423,9 @@ provider 与 model 都是必填配置。插件不提供隐式 provider、默认 
 ```text
 tmux-autoname daemon    daemon 内部生命周期管理
 tmux-autoname emit      输入内部 tmux/shell 事件
-tmux-autoname refresh   在额度内请求立即推理
+tmux-autoname refresh   等待额度内的立即推理并输出结果
 tmux-autoname auto      清除 Manual Name 并恢复自动模式
-tmux-autoname explain   输出当前 record、状态与安全诊断信息
+tmux-autoname explain   输出人类可读说明（`--json` 输出结构化数据）
 tmux-autoname secrets reload
                         重启 daemon 并重新加载配置与凭据
 ```
@@ -437,8 +447,8 @@ OpenAI-compatible HTTP 测试服务器。该服务器保留真实的 AI SDK 传�
 输出处理，同时提供确定性的响应、延迟、失败、请求计数和 payload 捕获。
 
 测试覆盖 window 创建、Scope 变化、Activity 变化、终端上下文生成、手动重命名
-及恢复、徽标、daemon 重启、密钥失败、超时、乱序结果、陈旧结果拒绝、调用限额
-和熔断恢复。自动执行路径还必须验证 stdout 与 stderr 均为空。
+及恢复、徽标、daemon 重启、旧 daemon 替换、密钥失败、超时、乱序结果、陈旧
+结果拒绝、调用限额和熔断恢复。自动执行路径还必须验证 stdout 与 stderr 均为空。
 
 ### 18.2 长时段加速模拟
 

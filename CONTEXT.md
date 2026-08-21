@@ -5,7 +5,7 @@ This context describes the semantic information used to name tmux windows. A nam
 ## Language
 
 **Name Record**:
-The structured meaning of an automatic window name, composed of Scope, Task, and Activity. It is independent of how the name is displayed.
+The structured meaning of an accepted automatic window name, composed of Scope, Task, and Activity. It is independent of how the name is displayed. A local name without an accepted Task is a Provisional Name, not a complete Name Record.
 _Avoid_: Title, generated string
 
 **Scope**:
@@ -39,6 +39,10 @@ _Avoid_: Naming algorithm, task format
 **Automatic Name**:
 A visible window name produced from a Name Record through a Display Profile.
 _Avoid_: AI name
+
+**Provisional Name**:
+A useful local window name rendered from Scope and Activity while no accepted Task is available. It remains usable during startup and AI failure but does not claim to be a complete Name Record.
+_Avoid_: Fallback record, empty Task
 
 **Manual Name**:
 A user-authored window name that takes precedence over an Automatic Name until automatic naming is explicitly restored.

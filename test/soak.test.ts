@@ -100,7 +100,14 @@ circuit_cooldown_ms = 600000
 `,
       );
 
-      expect((await tmux("-f", "/dev/null", "new-session", "-d", "-s", "partjobs", "-c", workspace)).exitCode).toBe(0);
+      expect((await run(
+        ["tmux", "-L", label, "-f", "/dev/null", "new-session", "-d", "-s", "partjobs", "-c", workspace],
+        {
+          TMUX_AUTONAME_CONFIG: configPath,
+          XDG_RUNTIME_DIR: runtimeDirectory,
+          TMUX_AUTONAME_BIN: binary,
+        },
+      )).exitCode).toBe(0);
       socket = (await tmux("display-message", "-p", "#{socket_path}")).stdout.trim();
       const serverPid = (await tmux("display-message", "-p", "#{pid}")).stdout.trim();
       environment = {

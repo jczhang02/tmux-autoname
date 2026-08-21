@@ -77,7 +77,7 @@ describe.serial("compiled isolated tmux E2E", () => {
       if (mode === "auth") {
         return Response.json({ error: { message: "unauthorized" } }, { status: 401 });
       }
-      if (mode === "timeout") await Bun.sleep(500);
+      if (mode === "timeout") await Bun.sleep(1000);
       if (mode === "gated") await gate.promise;
       const serialized = JSON.stringify(body);
       const workspaceId = serialized.match(/workspace:[a-f0-9]{20}/u)?.[0];
@@ -112,7 +112,7 @@ describe.serial("compiled isolated tmux E2E", () => {
   const tmux = (...args: string[]) => run(["tmux", "-L", label, ...args]);
   const cli = (...args: string[]) => run([join(process.cwd(), "dist/tmux-autoname"), ...args], { env });
   const explain = async () => {
-    const result = await cli("explain", "--window", windowId);
+    const result = await cli("explain", "--window", windowId, "--json");
     return JSON.parse(result.stdout) as {
       mode: string;
       visibleName: string;
@@ -148,22 +148,15 @@ describe.serial("compiled isolated tmux E2E", () => {
         paneId,
       }),
     });
-  const setTerminalContext = async (text: string) => {
+  const setTerminalContext = async (text: string, trigger = true) => {
     await tmux("send-keys", "-t", paneId, "C-u");
-    const quoted = `'${`Task: ${text}`.replaceAll("'", `'"'"'`)}'`;
-    await tmux("send-keys", "-l", "-t", paneId, `printf '%s\\n' ${quoted}`);
-    await tmux("send-keys", "-t", paneId, "Enter");
+    await tmux("send-keys", "-l", "-t", paneId, `Task: ${text}`);
     await waitFor(
       async () => (await tmux("capture-pane", "-p", "-t", paneId)).stdout,
       (value) => value.includes(text),
     );
-    await waitFor(
-      async () => (await tmux("display-message", "-p", "-t", paneId, "#{pane_current_command}"))
-        .stdout.trim(),
-      (value) => value === "zsh",
-    );
     await Bun.sleep(50);
-    return emitSettled();
+    return trigger ? emitSettled() : undefined;
   };
 
   beforeAll(async () => {
@@ -190,10 +183,10 @@ name = "TMUX_AUTONAME_E2E_KEY"
 
 [limits]
 debounce_ms = 10
-scan_interval_ms = 60000
+scan_interval_ms = 100
 content_settle_ms = 10
 minimum_call_interval_ms = 0
-request_timeout_ms = 100
+request_timeout_ms = 500
 max_calls_per_window_hour = 10
 max_calls_per_server_hour = 30
 circuit_failure_threshold = 3
@@ -202,7 +195,16 @@ circuit_cooldown_ms = 500
     );
 
     label = `tmux-autoname-e2e-${process.pid}`;
-    await tmux("-f", "/dev/null", "new-session", "-d", "-s", "partjobs", "-c", workspace);
+    await run(
+      ["tmux", "-L", label, "-f", "/dev/null", "new-session", "-d", "-s", "partjobs", "-c", workspace],
+      {
+        env: {
+          TMUX_AUTONAME_CONFIG: configPath,
+          XDG_RUNTIME_DIR: join(testRoot, "runtime"),
+          TMUX_AUTONAME_BIN: join(process.cwd(), "dist/tmux-autoname"),
+        },
+      },
+    );
     socket = (await tmux("display-message", "-p", "#{socket_path}")).stdout.trim();
     const serverPid = (await tmux("display-message", "-p", "#{pid}")).stdout.trim();
     tmuxEnv = `${socket},${serverPid},0`;
@@ -284,9 +286,9 @@ circuit_cooldown_ms = 500
   });
 
   test("uses real AI SDK HTTP with captured terminal content", async () => {
-    const automatic = await setTerminalContext("Please redesign the naming plugin");
-    expect(automatic.stdout).toBe("");
-    expect(automatic.stderr).toBe("");
+    await setTerminalContext("Please redesign the naming plugin", false);
+    const refreshed = await cli("refresh", "--window", windowId);
+    expect(refreshed.stdout).toContain("renamed →");
     await waitFor(async () => requests.length, (value) => value === 1);
     await waitFor(explain, (value) => value.record?.task === "redesign naming plugin");
     expect(await name()).toEndWith("/redesign naming plugin");
@@ -462,5 +464,40 @@ circuit_cooldown_ms = 500
     expect(
       `${persisted}${persistedServer}${await readFile(configPath, "utf8")}${logs.join("")}`,
     ).not.toContain(TEST_SECRET);
+  });
+
+  test("a stale daemon is replaced by the current build", async () => {
+    const runtimeDirectory = join(testRoot, "runtime", "tmux-autoname");
+    const socketFile = join(
+      runtimeDirectory,
+      (await readdir(runtimeDirectory)).find((file) => file.endsWith(".sock"))!,
+    );
+    await cli("daemon", "--stop");
+    await waitFor(
+      () => stat(socketFile).then(() => true).catch(() => false),
+      (exists) => !exists,
+    );
+
+    let stale: ReturnType<typeof Bun.listen>;
+    stale = Bun.listen<{ handled: boolean }>({
+      unix: socketFile,
+      socket: {
+        open(socket) {
+          socket.data = { handled: false };
+        },
+        data(socket, data) {
+          if (socket.data.handled || !data.toString().includes("\n")) return;
+          socket.data.handled = true;
+          const shutdown = data.toString().includes('"type":"shutdown"');
+          socket.write('{"ok":true}\n');
+          socket.end();
+          if (shutdown) setTimeout(() => stale.stop(true), 0);
+        },
+      },
+    });
+
+    const started = await cli("daemon");
+    expect(started.exitCode).toBe(0);
+    expect((await explain()).visibleName).toBe(await name());
   });
 });

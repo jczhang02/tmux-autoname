@@ -3,6 +3,8 @@ import { defaultConfig } from "../src/config";
 import {
   badgeText,
   buildScopeCandidates,
+  deterministicScope,
+  evidenceFingerprint,
   isValidTask,
   renderName,
   type NameRequest,
@@ -140,6 +142,32 @@ describe("AutonameRuntime interface", () => {
     expect(model.calls).toHaveLength(0);
   });
 
+  test("concurrent automatic hooks cannot misclassify a plugin rename as manual", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const runtime = new AutonameRuntime({ tmux, model: new FakeModel(), config: config() });
+
+    await Promise.all([
+      runtime.handle(event("window_changed")),
+      runtime.handle(event("window_changed")),
+    ]);
+
+    expect((await runtime.explain({ windowId: "@1" })).mode).toBe("automatic");
+  });
+
+  test("a delayed hook for an older plugin name stays automatic", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const runtime = new AutonameRuntime({ tmux, model: new FakeModel(), config: config() });
+
+    await runtime.handle(event("window_changed"));
+    const provisional = tmux.get("@1").windowName;
+    await runtime.handle(event("refresh_requested"));
+    await runtime.handle(event("manual_name_changed", { manualName: provisional }));
+
+    expect((await runtime.explain({ windowId: "@1" })).mode).toBe("automatic");
+  });
+
   test("changed terminal content can replace the task without an agent extension", async () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot());
@@ -173,12 +201,14 @@ describe("AutonameRuntime interface", () => {
     await clock.advance(10);
     expect(model.calls).toHaveLength(1);
 
-    await runtime.handle(event("refresh_requested"));
-    await clock.advance(10);
+    const refresh = runtime.handle(event("refresh_requested"));
+    await flush();
     expect(model.calls).toHaveLength(2);
 
     second.resolve(proposalFor(model.calls[1]!, "finish current design"));
-    await flush();
+    const outcome = await refresh;
+    expect(outcome.kind).toBe("applied");
+    expect(outcome.name).toEndWith("/finish current design");
     first.resolve(proposalFor(model.calls[0]!, "apply stale design"));
     await flush();
 
@@ -275,6 +305,122 @@ describe("AutonameRuntime interface", () => {
     expect((await runtime.explain({ windowId: "@1" })).limits.windowCallsLastHour).toBe(1);
   });
 
+  test("explicit refresh waits for the final name", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome).toEqual({
+      kind: "applied",
+      windowId: "@1",
+      name: "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+    });
+    expect(model.calls).toHaveLength(1);
+  });
+
+  test("normal terminal output during a refresh does not discard the result", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel(async (request) => {
+      tmux.setContent("%1", "provider request completed");
+      return proposalFor(request);
+    });
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome.kind).toBe("applied");
+  });
+
+  test("a restarted runtime clears a stale badge on first reconciliation", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(
+      windowSnapshot({
+        windowName:
+          "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+        persisted: {
+          mode: "automatic",
+          revision: 2,
+          record: {
+            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
+            task: "redesign naming plugin",
+            activity: "codex",
+          },
+          provenance: "ai",
+          lastAppliedName:
+            "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+        },
+      }),
+    );
+    const runtime = new AutonameRuntime({ tmux, model: new FakeModel(), config: config() });
+
+    await runtime.handle(event("window_changed"));
+
+    expect(tmux.badges.at(-1)).toEqual({ windowId: "@1", badge: "" });
+  });
+
+  test("a restarted runtime replaces an ungrounded persisted Scope", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(
+      windowSnapshot({
+        sessionName: "tmux-autoname",
+        sessionPath: "/home/jc",
+        panes: [
+          {
+            ...windowSnapshot().panes[0]!,
+            cwd: "/home/jc/dev/tmux-autoname",
+            gitRoot: "/home/jc/dev/tmux-autoname",
+          },
+        ],
+        persisted: {
+          mode: "automatic",
+          revision: 2,
+          record: {
+            scope: { workspace: "tmux-autoname", area: "dev/tmux-autoname" },
+            task: "debug old scope",
+            activity: "codex",
+          },
+          provenance: "ai",
+          lastAppliedName: "codex:tmux-autoname/dev/tmux-autoname/debug old scope",
+        },
+      }),
+    );
+    const runtime = new AutonameRuntime({ tmux, model: new FakeModel(), config: config() });
+
+    await runtime.handle(event("window_changed"));
+    const report = await runtime.explain({ windowId: "@1" });
+
+    expect(report.record).toMatchObject({ scope: { workspace: "tmux-autoname" }, task: "" });
+    expect(report.record?.scope.area).toBeUndefined();
+    expect(report.provenance).toBe("fallback");
+  });
+
+  test("credential reload closes the circuit without resetting quotas", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(
+      windowSnapshot({
+        serverPersisted: {
+          callTimes: [0, 1],
+          consecutiveFailures: 3,
+          circuitOpenUntil: 10_000,
+        },
+      }),
+    );
+    const clock = new FakeClock();
+    const runtime = new AutonameRuntime({ tmux, model: new FakeModel(), clock, config: config() });
+    await runtime.explain({ windowId: "@1" });
+
+    await runtime.resetFailures();
+    const report = await runtime.explain({ windowId: "@1" });
+
+    expect(report.limits.serverCallsLastHour).toBe(2);
+    expect(report.limits.circuitOpenUntil).toBeUndefined();
+    expect(tmux.serverState).toMatchObject({ callTimes: [0, 1], consecutiveFailures: 0 });
+  });
+
   test("model and credential failure retain fallback names", async () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot());
@@ -322,7 +468,69 @@ describe("domain rules", () => {
     );
   });
 
-  test("uses supporting panes, remote hosts, common ancestors, and session suffixes", () => {
+  test("uses the git root when the tmux session path is only the home directory", () => {
+    const snapshot = windowSnapshot({
+      sessionName: "tmux-autoname",
+      sessionPath: "/home/jc",
+      panes: [
+        {
+          ...windowSnapshot().panes[0]!,
+          cwd: "/home/jc/dev/tmux-autoname",
+          gitRoot: "/home/jc/dev/tmux-autoname",
+        },
+      ],
+    });
+
+    const candidates = buildScopeCandidates(snapshot);
+    expect(candidates.workspaces[0]?.value).toBe("tmux-autoname");
+    expect(candidates.workspaces.map((candidate) => candidate.value)).not.toContain("jc");
+    expect(candidates.areas.find((candidate) => candidate.workspaceId === candidates.workspaces[0]?.id))
+      .toBeUndefined();
+  });
+
+  test("keeps a deliberate sesh session as Workspace across a nested git repository", () => {
+    const candidates = buildScopeCandidates(
+      windowSnapshot({
+        panes: [
+          {
+            ...windowSnapshot().panes[0]!,
+            cwd: "/home/jc/dev/partjobs/client-a/service",
+            gitRoot: "/home/jc/dev/partjobs/client-a",
+          },
+        ],
+      }),
+    );
+
+    expect(candidates.workspaces[0]?.value).toBe("partjobs");
+    expect(candidates.areas[0]).toMatchObject({
+      value: "client-a/service",
+      workspaceId: candidates.workspaces[0]?.id,
+    });
+  });
+
+  test("does not attach an outside cwd suffix to an unrooted session Workspace", () => {
+    const snapshot = windowSnapshot({
+      sessionName: "tmux-autoname",
+      sessionPath: "/home/jc/dev/tmux-autoname",
+      sessionCwds: [
+        "/home/jc/dev/tmux-autoname",
+        "/home/jc/.config/tmux-autoname",
+      ],
+      panes: [
+        {
+          ...windowSnapshot().panes[0]!,
+          cwd: "/home/jc/.config/tmux-autoname",
+          gitRoot: undefined,
+        },
+      ],
+    });
+
+    expect(deterministicScope(buildScopeCandidates(snapshot))).toEqual({
+      workspace: "tmux-autoname",
+    });
+  });
+
+  test("uses supporting panes, remote hosts, common ancestors, and grounded areas", () => {
     const active = {
       ...windowSnapshot().panes[0]!,
       cwd: "/home/jc/dev/partjobs/alpha/service",
@@ -353,11 +561,7 @@ describe("domain rules", () => {
     expect(workspaceValues).toContain("partjobs");
     expect(candidates.workspaces.some((candidate) => candidate.facts.includes("supporting pane cwd")))
       .toBe(true);
-    expect(
-      candidates.areas.some((candidate) =>
-        candidate.facts.includes("shortest distinguishing cwd suffix across session windows")
-      ),
-    ).toBe(true);
+    expect(candidates.areas.every((candidate) => candidate.workspaceId)).toBe(true);
   });
 
   test("renders full names and leaves truncation to tmux", () => {
@@ -368,6 +572,23 @@ describe("domain rules", () => {
         activity: "nvim",
       }),
     ).toBe("nvim:partjobs/a/very/long/manuscript/path/rewrite patent draft");
+  });
+
+  test("ignores shell prompt redraws when deduplicating evidence", () => {
+    const snapshot = windowSnapshot();
+    const candidates = buildScopeCandidates(snapshot);
+    const first = evidenceFingerprint(
+      snapshot,
+      candidates,
+      "Task: Please redesign the naming plugin%",
+    );
+    const redrawn = evidenceFingerprint(
+      snapshot,
+      candidates,
+      "Task: Please redesign the naming plugin%\n╭─ /tmp/work 0.68 16.6G ─╮\n╰─ Task: Please redesign the naming plugin ─╯",
+    );
+
+    expect(redrawn).toBe(first);
   });
 
   test("validates English action phrases and both badge sets", () => {

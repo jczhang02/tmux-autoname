@@ -110,6 +110,7 @@ export type ScopeCandidate = {
   id: string;
   value: string;
   kind: "workspace" | "area";
+  workspaceId?: string;
   root?: string;
   facts: string[];
 };
@@ -134,6 +135,7 @@ export type NameRequest = {
   windowId: string;
   revision: number;
   fingerprint: string;
+  structureFingerprint: string;
   previous?: NameRecord;
   previousProvenance?: "fallback" | "ai";
   activity: string;
@@ -218,24 +220,6 @@ const commonAncestor = (paths: string[]): string | undefined => {
   return shared.length >= 2 ? `${sep}${shared.join(sep)}` : undefined;
 };
 
-const shortestDistinguishingSuffix = (
-  cwd: string,
-  sessionCwds: string[],
-): string | undefined => {
-  const paths = uniqueBy(sessionCwds.filter(isAbsolute).map(cleanPath), (value) => value);
-  if (paths.length < 2) return undefined;
-  const target = cleanPath(cwd).split(sep).filter(Boolean);
-  const others = paths
-    .filter((value) => value !== cleanPath(cwd))
-    .map((value) => value.split(sep).filter(Boolean));
-  if (others.length === 0) return undefined;
-  for (let count = 1; count <= target.length; count += 1) {
-    const suffix = target.slice(-count).join("/");
-    if (others.every((candidate) => candidate.slice(-count).join("/") !== suffix)) return suffix;
-  }
-  return undefined;
-};
-
 export const buildScopeCandidates = (
   snapshot: TmuxWindowSnapshot,
 ): ScopeCandidates => {
@@ -257,6 +241,13 @@ export const buildScopeCandidates = (
 
   type WorkspaceRoot = { value: string; root: string | undefined; facts: string[] };
   const roots: WorkspaceRoot[] = [];
+  const sessionRoot = snapshot.sessionPath ? cleanPath(snapshot.sessionPath) : undefined;
+  const sessionOwnsActive = Boolean(
+    sessionRoot &&
+      snapshot.sessionName &&
+      basename(sessionRoot) === snapshot.sessionName &&
+      (sessionRoot === cleanPath(active.cwd) || relativeArea(sessionRoot, active.cwd)),
+  );
   if (active.remoteHost) {
     roots.push({
       value: active.remoteHost,
@@ -264,11 +255,11 @@ export const buildScopeCandidates = (
       facts: ["remote host identity"],
     });
   }
-  if (snapshot.sessionPath) {
+  if (sessionOwnsActive && sessionRoot) {
     roots.push({
-      value: basename(snapshot.sessionPath),
-      root: cleanPath(snapshot.sessionPath),
-      facts: ["tmux session start path", `session:${snapshot.sessionName}`],
+      value: snapshot.sessionName,
+      root: sessionRoot,
+      facts: ["tmux session workspace", "session path contains active pane"],
     });
   }
   if (active.gitRoot) {
@@ -281,7 +272,7 @@ export const buildScopeCandidates = (
   roots.push(
     {
       value: snapshot.sessionName || basename(active.cwd),
-      root: snapshot.sessionPath ? cleanPath(snapshot.sessionPath) : undefined,
+      root: sessionOwnsActive ? sessionRoot : undefined,
       facts: ["tmux session context"],
     },
     {
@@ -320,7 +311,7 @@ export const buildScopeCandidates = (
   }
   const workspaceRoots = uniqueBy(
     roots.filter((candidate) => candidate.value.length > 0),
-    (candidate) => `${candidate.value}\0${candidate.root ?? ""}`,
+    (candidate) => candidate.value,
   );
 
   const workspaces = workspaceRoots.map((candidate) => ({
@@ -332,37 +323,25 @@ export const buildScopeCandidates = (
   }));
 
   const areaCandidates: ScopeCandidate[] = [];
-  for (const candidate of workspaceRoots) {
+  for (const [index, candidate] of workspaceRoots.entries()) {
     const value = candidate.root ? relativeArea(candidate.root, active.cwd) : undefined;
     if (!value) continue;
     areaCandidates.push({
       id: `area:${stableHash({ root: candidate.root, value })}`,
       value,
       kind: "area",
-      root: active.cwd,
+      workspaceId: workspaces[index]!.id,
+      root: candidate.root,
       facts: [`active cwd relative to ${candidate.value}`],
     });
   }
-  const suffix = shortestDistinguishingSuffix(active.cwd, snapshot.sessionCwds ?? []);
-  const activeIsWorkspaceRoot = workspaceRoots.some(
-    (candidate) =>
-      candidate.root === cleanPath(active.cwd) && !candidate.facts.includes("active pane cwd"),
-  );
-  if (suffix && !activeIsWorkspaceRoot) {
-    areaCandidates.push({
-      id: `area:${stableHash({ cwd: active.cwd, suffix })}`,
-      value: suffix,
-      kind: "area",
-      root: cleanPath(active.cwd),
-      facts: ["shortest distinguishing cwd suffix across session windows"],
-    });
-  }
   const areas = [...areaCandidates.reduce((merged, candidate) => {
-    const existing = merged.get(candidate.value);
+    const key = `${candidate.workspaceId ?? ""}\0${candidate.value}`;
+    const existing = merged.get(key);
     if (existing) {
       existing.facts = [...new Set([...existing.facts, ...candidate.facts])];
     } else {
-      merged.set(candidate.value, candidate);
+      merged.set(key, candidate);
     }
     return merged;
   }, new Map<string, ScopeCandidate>()).values()];
@@ -371,9 +350,25 @@ export const buildScopeCandidates = (
 };
 
 export const deterministicScope = (candidates: ScopeCandidates): Scope => {
-  const workspace = candidates.workspaces[0]?.value ?? "shell";
-  const area = candidates.areas[0]?.value;
-  return area ? { workspace, area } : { workspace };
+  const workspace = candidates.workspaces[0];
+  if (!workspace) return { workspace: "shell" };
+  const area = candidates.areas.find((candidate) => candidate.workspaceId === workspace.id);
+  return area
+    ? { workspace: workspace.value, area: area.value }
+    : { workspace: workspace.value };
+};
+
+export const isGroundedScope = (scope: Scope, candidates: ScopeCandidates): boolean => {
+  const workspaces = candidates.workspaces.filter(
+    (candidate) => candidate.value === scope.workspace,
+  );
+  if (workspaces.length === 0) return false;
+  if (!scope.area) return true;
+  return workspaces.some((workspace) =>
+    candidates.areas.some(
+      (area) => area.workspaceId === workspace.id && area.value === scope.area,
+    )
+  );
 };
 
 export const normalizeActivity = (command: string): string => {
@@ -436,7 +431,10 @@ export const acceptProposal = (
   const area = proposal.areaId
     ? request.candidates.areas.find((candidate) => candidate.id === proposal.areaId)
     : undefined;
-  if (!workspace || (proposal.areaId !== null && !area)) return undefined;
+  if (
+    !workspace ||
+    (proposal.areaId !== null && (!area || area.workspaceId !== workspace.id))
+  ) return undefined;
 
   const task = proposal.taskDecision === "keep" ? request.previous?.task : proposal.task;
   if (!task || !isValidTask(task)) return undefined;
@@ -464,9 +462,23 @@ export const evidenceFingerprint = (
       ? { id: active.id, cwd: active.cwd, command: active.command, gitRoot: active.gitRoot }
       : undefined,
     candidates,
-    terminalContext,
+    terminalContext: stableTerminalEvidence(terminalContext),
   });
 };
+
+const stableTerminalEvidence = (value: string): string[] => [
+  ...new Set(
+    value.split("\n")
+      .map((line) => line
+        .replace(/^[\s\u2500-\u257f]+|[\s\u2500-\u257f]+$/gu, "")
+        .replace(/[%$#>]\s*$/u, "")
+        .replace(/\s+/gu, " ")
+        .trim()
+        .toLowerCase())
+      .filter((line) => line.length >= 4)
+      .filter((line) => !/^(?:~|\/|\.\.?\/)\S*(?:\s+.*\d){2}/u.test(line)),
+  ),
+].slice(-24);
 
 export const scopeKey = (scope: Scope): string => `${scope.workspace}\0${scope.area ?? ""}`;
 

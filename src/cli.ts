@@ -9,6 +9,7 @@ import {
   startDaemon,
   type DaemonRequest,
 } from "./daemon";
+import type { ExplainReport, RuntimeOutcome } from "./runtime";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -34,6 +35,47 @@ const targetEvent = (
   });
 
 const tmux = (): TmuxCliPort => TmuxCliPort.fromEnvironment();
+const jsonOutput = (): boolean => args.includes("--json");
+
+const reasonText = (reason: string | undefined): string => ({
+  circuit_open: "AI circuit is open; reload credentials or wait for cooldown",
+  window_quota: "window AI quota reached",
+  server_quota: "server AI quota reached",
+  minimum_interval: "waiting for the minimum AI call interval",
+  model_not_configured: "AI is not configured",
+  provider_authentication_failed: "provider rejected the credential",
+  secret_unavailable: "credential is unavailable",
+  model_timeout: "provider request timed out",
+  invalid_model_response: "provider returned invalid JSON",
+  invalid_model_proposal: "provider returned an invalid name proposal",
+  evidence_changed: "pane evidence changed while AI was running",
+  superseded: "a newer naming request replaced this one",
+}[reason ?? ""] ?? reason ?? "no change");
+
+const formatExplain = (report: ExplainReport): string => {
+  const scope = report.record?.scope.area
+    ? `${report.record.scope.workspace}/${report.record.scope.area}`
+    : report.record?.scope.workspace ?? "(pending)";
+  const status = report.lastError
+    ? reasonText(report.lastError)
+    : report.badge.state === "generating" ? "generating" : "ready";
+  return [
+    `${report.windowId} ${report.mode}`,
+    `Name: ${report.visibleName}`,
+    `Activity: ${report.record?.activity ?? "(pending)"}`,
+    `Scope: ${scope}`,
+    `Task: ${report.record?.task || "(pending AI)"}`,
+    `Source: ${report.provenance === "ai" ? "AI" : "local provisional"}`,
+    `Calls: window ${report.limits.windowCallsLastHour}/${report.limits.windowCallLimit}, server ${report.limits.serverCallsLastHour}/${report.limits.serverCallLimit}`,
+    `Status: ${status}`,
+  ].join("\n");
+};
+
+const formatOutcome = (outcome: RuntimeOutcome, report: ExplainReport): string => {
+  if (outcome.kind === "applied") return `${outcome.windowId} renamed → ${outcome.name ?? report.visibleName}`;
+  if (outcome.kind === "manual") return `${outcome.windowId} kept manual name → ${report.visibleName}`;
+  return `${outcome.windowId} unchanged → ${report.visibleName} (${reasonText(outcome.reason)})`;
+};
 
 const requestWithStart = async (
   port: TmuxCliPort,
@@ -67,6 +109,7 @@ const parseEmitEvent = async (): Promise<SemanticEvent> => {
       ? { paneId: flag("--pane") ?? process.env.TMUX_PANE }
       : {}),
     ...(flag("--command-name") ? { commandName: flag("--command-name") } : {}),
+    ...(flag("--manual-name") !== undefined ? { manualName: flag("--manual-name") } : {}),
     ...(flag("--exit-code") ? { exitCode: Number.parseInt(flag("--exit-code")!, 10) } : {}),
   });
   return event;
@@ -108,8 +151,22 @@ const main = async (): Promise<number> => {
     case "refresh": {
       const port = tmux();
       const event = targetEvent("refresh_requested");
-      const response = await requestWithStart(port, { type: "event", event, wait: true });
+      let response = await requestWithStart(port, { type: "event", event, wait: true }, 30_000);
       if (!response.ok) throw new Error(response.error);
+      let outcome = response.result as RuntimeOutcome | undefined;
+      if (outcome?.kind === "ignored" && ["evidence_changed", "superseded"].includes(outcome.reason ?? "")) {
+        response = await requestWithStart(port, { type: "event", event, wait: true }, 30_000);
+        if (!response.ok) throw new Error(response.error);
+        outcome = response.result as RuntimeOutcome | undefined;
+      }
+      const explained = await requestWithStart(port, { type: "explain", ...explicitTarget() });
+      if (!explained.ok || !outcome) throw new Error(explained.ok ? "missing_result" : explained.error);
+      const report = explained.result as ExplainReport;
+      process.stdout.write(
+        jsonOutput()
+          ? `${JSON.stringify({ outcome, report }, null, 2)}\n`
+          : `${formatOutcome(outcome, report)}\n`,
+      );
       return 0;
     }
     case "auto": {
@@ -117,27 +174,38 @@ const main = async (): Promise<number> => {
       const event = targetEvent("manual_name_changed", { manualName: "" });
       const response = await requestWithStart(port, { type: "event", event, wait: true });
       if (!response.ok) throw new Error(response.error);
+      const outcome = response.result as RuntimeOutcome | undefined;
+      if (outcome) process.stdout.write(`${outcome.windowId} automatic → ${outcome.name ?? "ready"}\n`);
       return 0;
     }
     case "explain": {
       const port = tmux();
       const response = await requestWithStart(port, { type: "explain", ...explicitTarget() });
       if (!response.ok) throw new Error(response.error);
-      process.stdout.write(`${JSON.stringify(response.result, null, 2)}\n`);
+      const report = response.result as ExplainReport;
+      process.stdout.write(
+        jsonOutput() ? `${JSON.stringify(report, null, 2)}\n` : `${formatExplain(report)}\n`,
+      );
       return 0;
     }
     case "secrets": {
       if (args[1] !== "reload") throw new Error("usage: tmux-autoname secrets reload");
       const port = tmux();
-      const response = await requestWithStart(port, { type: "shutdown" });
+      const response = await requestWithStart(port, { type: "shutdown", resetFailures: true });
       if (!response.ok) throw new Error(response.error);
-      await Bun.sleep(100);
+      const socket = runtimePaths(port.serverId).socket;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await Bun.sleep(25);
+        const running = await daemonRequest(socket, { type: "ping" }, 50).catch(() => undefined);
+        if (!running?.ok) break;
+      }
       await startDaemon(port);
+      process.stdout.write("Credentials reloaded; daemon restarted.\n");
       return 0;
     }
     default:
       process.stderr.write(
-        "usage: tmux-autoname <daemon|emit|refresh|auto|explain|secrets reload>\n",
+        "usage:\n  tmux-autoname refresh [--window @N|--pane %N] [--json]\n  tmux-autoname explain [--window @N|--pane %N] [--json]\n  tmux-autoname auto [--window @N|--pane %N]\n  tmux-autoname secrets reload\n  tmux-autoname daemon [--stop]\n",
       );
       return 2;
   }

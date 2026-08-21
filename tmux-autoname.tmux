@@ -31,7 +31,7 @@ if [ "$(tmux show-option -gqv @tmux-autoname-install-badge)" != off ]; then
 fi
 
 emit_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind window_changed --window #{window_id} >/dev/null 2>&1"
-rename_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind manual_name_changed --window #{window_id} >/dev/null 2>&1"
+rename_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind manual_name_changed --window #{window_id} --manual-name #{q:window_name} >/dev/null 2>&1"
 
 tmux set-hook -g 'after-new-window[120]' "run-shell -b '$emit_hook'"
 tmux set-hook -g 'after-select-window[120]' "run-shell -b '$emit_hook'"

@@ -1,8 +1,10 @@
 # tmux-autoname
 
+English | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-AI-first tmux window names that describe the work, not just the executable.
+tmux-autoname gives tmux windows names that describe the current work instead of repeating the foreground executable.
 
 ```text
 codex:tmux-autoname/improve process detection
@@ -10,41 +12,32 @@ pi:partjobs/client-a/review payment flow
 nvim:website/fix mobile navigation
 ```
 
-Names use `activity:scope/task`:
+The default format is `activity:scope/task`.
 
-- **Activity** is resolved locally from the active foreground process.
-- **Scope** is selected from tmux, cwd, and Git evidence; the model cannot
-  invent paths.
-- **Task** is a validated 2–5 word English action phrase generated from a
-  small rendered terminal tail.
+- Activity comes from the active foreground process.
+- Scope comes from tmux, cwd, Git, and path evidence. The model selects from local candidates and cannot invent a path.
+- Task is a validated 2 to 5 word English action phrase generated from a bounded terminal capture.
 
-The plugin is asynchronous, preserves manual names, and never puts a prompt or
-popup in the terminal. Its state appears as a small window-tab badge instead.
+The plugin runs asynchronously. It keeps manual names intact and never opens a prompt or popup. A small badge in the window tab reports its state.
 
-## Why this plugin
+## How it works
 
-- Understands what an agent or command is doing, beyond names such as `node`
-  or `systemd-run`.
-- Keeps nested project context: a `partjobs` session can become
-  `pi:partjobs/client-a/review payment flow` after entering `client-a`.
-- Uses only grounded scope candidates and rejects stale or malformed model
-  output.
-- Watches only panes visible in attached clients and calls AI only after the
-  screen settles and evidence changes.
-- Requires no Codex, Claude Code, Pi, or editor-specific extension.
+- Nested directories remain visible. A `partjobs` session can use a name such as `pi:partjobs/client-a/review payment flow` after you enter `client-a`.
+- Process detection looks through Linux `systemd-run` wrappers, so tools such as `codex` and `pi` keep their own activity names.
+- The screen monitor works with terminal programs directly. You do not need a Codex, Claude Code, Pi, or editor extension.
+- AI runs after useful evidence changes and the visible screen settles. Duplicate prompt redraws do not trigger another request.
+- Scope IDs, revisions, and evidence fingerprints are checked before a generated name is accepted. Late or malformed results are discarded.
+- Local process and path metadata stays current for every pane. Terminal text is captured only from panes visible in attached clients.
 
 ## Requirements
 
 - tmux 3.2 or newer
 - Bun 1.3 or newer for installation and development
-- An AI provider compatible with OpenAI, Anthropic, or the OpenAI API shape
-- zsh only if you enable the optional shell lifecycle integration
-- The CLI for your chosen secret backend: `op`, `secret-tool`, or macOS
-  `security`
+- OpenAI, Anthropic, or an OpenAI-compatible provider
+- zsh only if you use the optional shell lifecycle integration
+- `op`, `secret-tool`, or macOS `security` if you use that credential source
 
-## Installation
-
-### TPM
+## Install with TPM
 
 Add the plugin to your tmux configuration:
 
@@ -52,8 +45,7 @@ Add the plugin to your tmux configuration:
 set -g @plugin 'jczhang02/tmux-autoname'
 ```
 
-Press `prefix` + <kbd>I</kbd> to install it, then build the current source
-distribution once:
+Press `prefix` + <kbd>I</kbd>. TPM clones the repository, but this repository does not commit the compiled binary, so build it once after each install or update:
 
 ```sh
 plugin_dir="${TMUX_PLUGIN_MANAGER_PATH:-$HOME/.tmux/plugins}/tmux-autoname"
@@ -63,15 +55,9 @@ bun run build
 tmux source-file ~/.tmux.conf
 ```
 
-If your TPM directory or tmux configuration lives under XDG paths, use those
-paths instead—for example `~/.config/tmux/plugins/tmux-autoname` and
-`~/.config/tmux/tmux.conf`.
+If you keep TPM or tmux under XDG directories, use the matching paths. Common examples are `~/.config/tmux/plugins/tmux-autoname` and `~/.config/tmux/tmux.conf`.
 
-> [!NOTE]
-> The repository does not currently commit a built binary. A clean TPM clone
-> therefore needs the one-time build above after installation or update.
-
-### Manual
+## Install manually
 
 ```sh
 git clone https://github.com/jczhang02/tmux-autoname ~/.tmux/plugins/tmux-autoname
@@ -80,7 +66,7 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-Add the loader to `~/.tmux.conf`:
+Load the plugin from `~/.tmux.conf`:
 
 ```tmux
 run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
@@ -92,8 +78,7 @@ Then reload tmux:
 tmux source-file ~/.tmux.conf
 ```
 
-Add the plugin's `bin` directory to `PATH` if you want to run its commands by
-name:
+Add the plugin's `bin` directory to `PATH` if you want to call its commands by name:
 
 ```sh
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
@@ -101,14 +86,14 @@ export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 
 ## Configure AI
 
-Start from the example configuration:
+Copy the example configuration:
 
 ```sh
 mkdir -p ~/.config/tmux-autoname
 cp config/config.example.toml ~/.config/tmux-autoname/config.toml
 ```
 
-A minimal OpenAI-compatible configuration looks like this:
+The plugin has no default provider or model. This minimal example uses an OpenAI-compatible endpoint and a 1Password reference:
 
 ```toml
 [ai]
@@ -122,8 +107,7 @@ source = "onepassword"
 ref = "op://Private/OpenAI/api-key"
 ```
 
-For a plaintext key, replace the `[ai.credential]` table with `api_key` inside
-the `[ai]` table:
+You can store the key directly in the same file instead:
 
 ```toml
 [ai]
@@ -133,73 +117,67 @@ base_url = "https://api.example.com/v1"
 api_key = "your-api-key"
 ```
 
-`api_key` and `[ai.credential]` are mutually exclusive. A plaintext key is the
-simplest option but is stored directly on disk; restrict the configuration file
-to your user:
+`api_key` and `[ai.credential]` cannot be used together. A plaintext key is easy to set up but remains on disk. Limit access to the file:
 
 ```sh
 chmod 600 ~/.config/tmux-autoname/config.toml
 ```
 
-Available reference backends are:
+Credential references support these sources:
 
-| Source | Configuration | Unlock behavior |
+| Source | Configuration | Behavior |
 |---|---|---|
-| 1Password | `source = "onepassword"` and an `op://` reference | Use 1Password CLI desktop-app integration |
-| Linux keyring | `source = "keyring"`, `service`, and `account` | Uses the logged-in Secret Service session |
-| macOS Keychain | `source = "keychain"`, `service`, and `account` | Uses the user's unlocked Keychain |
-| Environment | `source = "env"` and `name` | Variable must exist in the tmux server environment |
+| 1Password | `source = "onepassword"` and an `op://` reference | Uses the 1Password CLI and its desktop app integration |
+| Linux keyring | `source = "keyring"`, `service`, and `account` | Reads from the logged-in Secret Service session with `secret-tool` |
+| macOS Keychain | `source = "keychain"`, `service`, and `account` | Reads from the unlocked user Keychain with `security` |
+| Environment | `source = "env"` and `name` | Reads the named variable from the tmux server environment |
 
-The credential is loaded only on the first model request and cached in daemon
-memory, so a password manager is not called for every rename. Run this after a
-configuration or key change:
+The daemon resolves a credential on the first model request and keeps it in memory. It does not ask the password manager for every rename. After changing the configuration or key, run:
 
 ```sh
 tmux-autoname secrets reload
 ```
 
-A provider 401/403 response also clears the cached credential.
+This restarts the daemon, clears cached credentials and authentication failures, and preserves hourly request counts. A provider response with status 401 or 403 also clears the cached credential.
 
-## Usage
+The default configuration path is `~/.config/tmux-autoname/config.toml`. Set `TMUX_AUTONAME_CONFIG` to use another file.
 
-Once loaded, the plugin starts its daemon and names visible windows
-automatically. The default monitor checks every 3 seconds and waits for 4
-seconds of stable screen content before considering an AI request.
+## Use it
 
-Use the normal tmux rename binding—commonly `prefix` + <kbd>,</kbd>—to set a
-manual name. A non-empty manual name always wins until automation is restored:
+Loading the plugin starts one daemon for the tmux server. The default monitor checks every 3 seconds and waits for 4 seconds of stable visible content before considering an AI request.
+
+Use tmux's normal rename binding, usually `prefix` + <kbd>,</kbd>, to take manual control of a window name. The plugin leaves a non-empty manual name unchanged until you run:
 
 ```sh
 tmux-autoname auto
 ```
 
-Other commands:
+User-facing commands:
 
-```text
-tmux-autoname refresh          request inference now, within quota
-tmux-autoname explain          show the current record and safe diagnostics
-tmux-autoname secrets reload   reload configuration and credentials
-```
+| Command | What it does |
+|---|---|
+| `tmux-autoname refresh` | Requests inference now, waits for the final applied, failed, or blocked result, and prints it |
+| `tmux-autoname explain` | Prints the current name record, mode, badge, error, request counts, and circuit state without requesting inference |
+| `tmux-autoname auto` | Clears a manual name and returns the window to automatic mode |
+| `tmux-autoname secrets reload` | Restarts the daemon and reloads configuration and credentials |
 
-`refresh`, `auto`, and `explain` accept `--window @ID` or `--pane %ID`; inside
-tmux they otherwise target the current pane.
+`refresh`, `auto`, and `explain` accept `--window @ID` or `--pane %ID`. Inside tmux they otherwise use the current pane. Add `--json` to `refresh` or `explain` for structured output.
+
+`refresh` skips the debounce and minimum call interval. Hourly quotas and the circuit breaker still apply.
 
 ### Optional zsh lifecycle events
 
-The screen monitor works without shell integration. To send immediate command
-start/finish events as an additional scheduling signal, add this to `~/.zshrc`:
+The screen monitor does not require shell integration. If you want command start and finish events to act as extra scheduling signals, add this to `~/.zshrc`:
 
 ```zsh
 source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
-This integration sends only the command basename and exit status. It does not
-send command arguments.
+The integration sends the command basename and exit status. It does not send command arguments.
 
 ## Window-tab badges
 
-Badges are appended to the existing `window-status-format`; they do not replace
-your theme.
+The plugin appends its badge to your existing `window-status-format`; it does not replace the theme.
 
 | State | Plain | Nerd Font |
 |---|---:|---:|
@@ -207,58 +185,42 @@ your theme.
 | Failed | `!` | `` |
 | Secret unavailable | `K!` | `` |
 | Manual ownership | `M` | `` |
+| Healthy | empty | empty |
 
-Enable Nerd Font badges before the plugin is loaded:
+Enable Nerd Font badges before loading the plugin:
 
 ```tmux
 set -g @tmux-autoname-badge-style 'nerd'
 ```
 
-To place the badge yourself, also set:
+To place the badge in your status format yourself:
 
 ```tmux
 set -g @tmux-autoname-install-badge 'off'
 ```
 
-The window-scoped value is available as `#{@tmux-autoname-badge}`.
+The window-scoped value is `#{@tmux-autoname-badge}`.
 
-## Process and tmux compatibility
+## tmux and process compatibility
 
-The loader disables tmux's built-in `automatic-rename` so it cannot overwrite
-semantic names. It installs indexed hooks and appends its badge idempotently,
-allowing unrelated indexed hooks and status themes to coexist.
+The loader disables tmux's built-in `automatic-rename`, installs indexed hooks, and appends its badge without replacing unrelated hooks or status formats.
 
-On Linux, when tmux reports `systemd-run` as the active command, the plugin
-reads the pane's foreground process group from procfs and resolves only the
-executable after systemd-run's explicit `--` separator. For example, these
-remain `codex` and `pi` even when launched through a resource-limiting
-`systemd-run --wait --pty -- …` wrapper. Failures safely fall back to
-`systemd-run`; the raw command line is never persisted or sent to the model.
+Each daemon reports a build identity. Reloading a newer build replaces the stale daemon cleanly.
 
-Agent completion notifications are independent. The plugin neither emits nor
-consumes OSC notifications and never renames a window on agent completion.
+On Linux, the process resolver inspects the foreground process group when tmux reports `systemd-run`. It resolves the executable after an explicit `--` separator. A command launched through `systemd-run --wait --pty -- …` therefore remains `codex` or `pi`. If inspection fails, the activity safely stays `systemd-run`. The resolver does not persist or send the raw procfs command line.
 
-## Privacy, cost, and resources
+Agent completion notifications are separate. tmux-autoname does not emit or consume OSC notifications and does not rename a window because an agent finished.
+
+## Privacy, cost, and resource use
 
 > [!IMPORTANT]
-> AI requests contain the active pane's rendered tail plus structured tmux,
-> cwd, process, title, Git/path candidate, previous-name, and limited supporting
-> pane metadata. Use a provider and endpoint appropriate for that data.
+> A model request contains the active pane's rendered tail and structured tmux, cwd, process, title, Git/path candidate, previous-name, and limited supporting-pane metadata. Choose a provider and endpoint that you trust with this data.
 
-Terminal context is capped at 50 lines and 8 KiB, redacted locally for common
-secret formats, kept in memory, and never written to tmux state or logs.
-Redaction is best-effort. Full scrollback, environment dumps, shell history,
-and raw procfs command lines are not sent. Command arguments already visible in
-the rendered terminal tail can be included.
+Terminal context is limited to 50 lines and 8 KiB. Common secret formats are redacted locally on a best-effort basis. The context stays in memory and is not written to tmux state or logs. The plugin does not send full scrollback, environment dumps, shell history, or raw procfs command lines. Command arguments already visible in the terminal capture can be included.
 
-AI runs only when settled evidence changes. Defaults cap requests at six per
-window and thirty per tmux server per hour, with output limited to 64 tokens.
-Measured prompts were roughly 400–700 input tokens for typical captures and
-2,500–5,000 near the 8 KiB limit; provider tokenizers vary.
+The plugin calls AI only after settled evidence changes. The defaults allow at most six requests per window and thirty requests per tmux server per hour. Output is capped at 512 tokens. Typical captured prompts measured about 250 to 500 input tokens; captures near the 8 KiB limit measured about 2,500 to 5,000. Provider tokenizers differ.
 
-A local steady-state sample with one visible pane averaged 0.7% CPU over 30
-seconds, with stable RSS and file descriptors. This is a measurement, not a
-hardware-independent guarantee. Lower the quotas if needed:
+A local steady-state test with one visible pane averaged 0.7% CPU for 30 seconds, with stable memory and file descriptor counts. Hardware and workloads differ. You can lower the quotas:
 
 ```toml
 [limits]
@@ -274,14 +236,12 @@ bun install --frozen-lockfile
 bun run check
 ```
 
-`check` runs type checking, unit and simulation tests, a real isolated tmux E2E
-test with a local fake provider, and shell validation. The opt-in release soak
-test runs for 30 real minutes:
+`bun run check` runs type checking, unit and simulation tests, an isolated tmux E2E test with a local fake provider, and shell validation.
+
+The optional release soak runs for 30 minutes:
 
 ```sh
 bun run test:soak
 ```
 
-The simulation advances 24 hours of logical time; no 24-hour wall-clock run is
-required. See [SPEC.md](SPEC.md) for the behavior contract and
-[SPEC.zh-CN.md](SPEC.zh-CN.md) for its Chinese version.
+The simulation advances 24 hours of logical time. It does not wait for 24 hours of wall-clock time. See [SPEC.md](SPEC.md) for the behavior contract and [SPEC.zh-CN.md](SPEC.zh-CN.md) for its Chinese version.

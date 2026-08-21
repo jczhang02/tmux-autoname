@@ -82,6 +82,8 @@ with no trailing punctuation.
 - A small TPM shell loader for installation and tmux hooks.
 - One daemon per tmux server.
 - A Unix socket under `XDG_RUNTIME_DIR` for local event delivery.
+- A build identity in daemon pings; a launcher replaces a daemon from an older
+  build before sending events.
 
 Release builds must disable Bun runtime autoloading of `.env` and
 `bunfig.toml`:
@@ -129,10 +131,11 @@ candidate generation, model calls, revision fencing, manual ownership,
 rendering, credential caching, and tmux writes.
 
 The implementation uses tmux hooks, optional shell events, and a low-frequency
-monitor of panes visible in attached clients. After the rendered screen is
-unchanged for the settle period, the runtime captures at most 50 lines and 8
-KiB for one inference. It does not use tmux control mode, stream pane output,
-or install Agent extensions.
+monitor. Lightweight process/path signals cover all panes so inactive windows
+converge after startup and process changes. Rendered text is captured only from
+panes visible in attached clients. After the screen is unchanged for the settle
+period, the runtime captures at most 50 lines and 8 KiB for one inference. It
+does not use tmux control mode, stream pane output, or install Agent extensions.
 
 ## 7. Evidence hierarchy
 
@@ -162,14 +165,18 @@ Local code builds candidates from:
 - active and supporting pane cwd values;
 - git/worktree roots;
 - remote host identity;
-- stable common ancestors;
-- shortest distinguishing path suffixes across session windows.
+- stable common ancestors.
 
-A session name is context, not automatically a Workspace. Raw cwd is evidence,
-not automatically Scope.
+A session root is trusted as Workspace when its basename matches the session
+name and it contains the active cwd. This preserves deliberate `sesh` project
+containers such as `partjobs`. Otherwise the active Git/worktree root is the
+preferred local Workspace, preventing a generic session path such as `$HOME`
+from producing `project/dev/project`. A session name and raw cwd remain evidence,
+not automatic Scope.
 
 Each candidate has an opaque ID, label, kind, and grounded path or host facts.
-AI may select candidate IDs but may not return arbitrary paths.
+Every Area candidate is tied to one Workspace ID. AI may select compatible
+candidate IDs but may not return arbitrary or cross-Workspace paths.
 
 Example input:
 
@@ -224,6 +231,9 @@ AI generation does not occur merely because:
 - Activity changes while Scope and Task remain valid;
 - an evidence fingerprint is unchanged.
 
+Fingerprint normalization removes duplicate prompt redraws and low-information
+shell chrome without changing the bounded terminal evidence sent to the model.
+
 Initial internal defaults:
 
 ```text
@@ -232,7 +242,7 @@ active-pane scan          3000 ms
 content settle            4000 ms
 minimum call interval   10000 ms per window
 in-flight requests      1 per window
-request timeout         4000 ms
+request timeout        15000 ms
 automatic model retries 0
 automatic calls          6 per window per hour
 automatic calls         30 per tmux server per hour
@@ -242,7 +252,9 @@ failure circuit cooldown 10 minutes
 
 A forced refresh bypasses fingerprint deduplication and the minimum interval,
 but not manual ownership, request validation, hourly quotas, or the circuit
-breaker. Every provider request is charged against the same quotas. When a
+breaker. The command waits for a final applied/failed/blocked outcome rather
+than returning at scheduling time. Every provider request is charged against
+the same quotas. When a
 quota or circuit breaker blocks inference, the last-known-good or deterministic
 fallback name remains active.
 
@@ -285,12 +297,14 @@ AI never returns the final rendered window name.
 
 **Token and cost envelope.** Token counts depend on the provider and model
 tokenizer and are not a protocol guarantee. In the local AI SDK transport
-fixture, a typical evidence prompt was 1,449 UTF-8 bytes, estimated at 400-700
+fixture, a typical evidence prompt was estimated at 250-500
 input tokens. A full 8 KiB terminal-context fixture produced a 9,517-byte
 prompt, estimated at 2,500-5,000 input tokens. Candidate and path data vary,
-and providers may account for the structured-output schema separately. Model
-output is capped at 64 tokens. At the default per-window quota, the typical
-upper estimate is 2,400-4,200 input tokens per hour; an all-full-capture case
+and provider accounting varies. Model output is capped at 512 tokens so
+reasoning-capable compatible models can finish; generation stops after the
+small JSON object, so the cap is not fixed consumption. At the default
+per-window quota, the typical upper estimate is 1,500-3,000 input tokens per
+hour; an all-full-capture case
 is about 15,000-30,000.
 
 ## 12. State and stale-result fencing
@@ -428,6 +442,8 @@ Rules:
 - Resolve lazily on the first model call.
 - Cache in daemon memory for the daemon session.
 - Clear on daemon exit, explicit secret reload, or provider 401/403.
+- Explicit secret reload closes the authentication failure circuit but
+  preserves hourly call timestamps and quotas.
 - Never place resolved values in tmux options, argv, logs, state files, prompts,
   or crash reports.
 - Background resolution must not open an interactive terminal prompt. Failure
@@ -438,9 +454,9 @@ Rules:
 ```text
 tmux-autoname daemon    internal daemon lifecycle
 tmux-autoname emit      internal tmux/shell event input
-tmux-autoname refresh   request immediate inference within quota
+tmux-autoname refresh   wait for immediate inference and print its outcome
 tmux-autoname auto      clear Manual Name and resume automation
-tmux-autoname explain   print current record, state, and safe diagnostics
+tmux-autoname explain   print a human explanation (`--json` for structured data)
 tmux-autoname secrets reload
                         restart the daemon and reload config/credentials
 ```
@@ -466,9 +482,9 @@ and payload capture.
 
 The suite covers window creation, Scope changes, Activity changes,
 terminal-context generation, manual rename and restore, badges, daemon restart,
-secret failure, timeouts, out-of-order results, stale-result rejection, rate
-limits, and circuit breaker recovery. Automatic paths are also checked for
-empty stdout and stderr.
+stale-daemon replacement, secret failure, timeouts, out-of-order results,
+stale-result rejection, rate limits, and circuit breaker recovery. Automatic
+paths are also checked for empty stdout and stderr.
 
 ### 18.2 Accelerated long-duration simulation
 

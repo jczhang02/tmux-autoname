@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, rename, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AiSdkModel, TmuxCliPort } from "./adapters";
@@ -9,41 +9,47 @@ import { AutonameRuntime, type ExplainReport, type RuntimeOutcome } from "./runt
 
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const LOG_LIMIT_BYTES = 64 * 1024;
+export const DAEMON_BUILD = "0.4.0";
 
 export type RuntimePaths = {
   directory: string;
   socket: string;
   log: string;
   pid: string;
+  startupLock: string;
 };
 
 export type DaemonRequest =
   | { type: "ping" }
   | { type: "event"; event: SemanticEvent; wait?: boolean }
   | { type: "explain"; windowId?: string; paneId?: string }
-  | { type: "shutdown" };
+  | { type: "shutdown"; resetFailures?: boolean };
 
 export type DaemonResponse =
-  | { ok: true; result?: RuntimeOutcome | ExplainReport }
+  | { ok: true; build?: string; result?: RuntimeOutcome | ExplainReport }
   | { ok: false; error: string };
 
 type ContentObservation = { digest: string; changedAt: number; emitted: boolean };
 
 export class ContentMonitor {
-  readonly #tmux: Pick<TmuxCliPort, "activePanes" | "capturePane">;
+  readonly #tmux: Pick<TmuxCliPort, "activePanes" | "paneSignals" | "capturePane">;
   readonly #settleMs: number;
-  readonly #onSettled: (paneId: string) => Promise<RuntimeOutcome>;
+  readonly #onChanged: ((paneId: string) => Promise<RuntimeOutcome>) | undefined;
+  readonly #onSettled: ((paneId: string) => Promise<RuntimeOutcome>) | undefined;
   readonly #observations = new Map<string, ContentObservation>();
+  readonly #paneSignals = new Map<string, string>();
   #timer: ReturnType<typeof setInterval> | undefined;
   #scanning = false;
 
   constructor(options: {
-    tmux: Pick<TmuxCliPort, "activePanes" | "capturePane">;
+    tmux: Pick<TmuxCliPort, "activePanes" | "paneSignals" | "capturePane">;
     settleMs: number;
-    onSettled: (paneId: string) => Promise<RuntimeOutcome>;
+    onChanged?: (paneId: string) => Promise<RuntimeOutcome>;
+    onSettled?: (paneId: string) => Promise<RuntimeOutcome>;
   }) {
     this.#tmux = options.tmux;
     this.#settleMs = options.settleMs;
+    this.#onChanged = options.onChanged;
     this.#onSettled = options.onSettled;
   }
 
@@ -57,12 +63,25 @@ export class ContentMonitor {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = undefined;
     this.#observations.clear();
+    this.#paneSignals.clear();
   }
 
   async scan(now = Date.now()): Promise<void> {
     if (this.#scanning) return;
     this.#scanning = true;
     try {
+      const signals = await this.#tmux.paneSignals();
+      const livePanes = new Set(signals.map((signal) => signal.paneId));
+      for (const signal of signals) {
+        if (this.#paneSignals.get(signal.paneId) === signal.signature) continue;
+        this.#paneSignals.set(signal.paneId, signal.signature);
+        await this.#onChanged?.(signal.paneId).catch(() => undefined);
+      }
+      for (const paneId of this.#paneSignals.keys()) {
+        if (!livePanes.has(paneId)) this.#paneSignals.delete(paneId);
+      }
+      if (!this.#onSettled) return;
+
       const active = new Set(await this.#tmux.activePanes());
       for (const paneId of active) {
         const content = await this.#tmux.capturePane(paneId).catch(() => "");
@@ -102,6 +121,7 @@ export const runtimePaths = (
     socket: join(directory, `${serverId}.sock`),
     log: join(directory, `${serverId}.log`),
     pid: join(directory, `${serverId}.pid`),
+    startupLock: join(directory, `${serverId}.start`),
   };
 };
 
@@ -109,33 +129,79 @@ export const startDaemon = async (tmux: TmuxCliPort): Promise<void> => {
   const paths = runtimePaths(tmux.serverId);
   await mkdir(paths.directory, { recursive: true, mode: 0o700 });
   await chmod(paths.directory, 0o700);
-  if (await daemonRequest(paths.socket, { type: "ping" }, 200).catch(() => undefined)) {
-    return;
+  let running = await daemonRequest(paths.socket, { type: "ping" }, 500).catch(
+    () => undefined,
+  );
+  if (running?.ok && running.build === DAEMON_BUILD) return;
+
+  const startupLock = await acquireStartupLock(paths.startupLock);
+  if (!startupLock) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await Bun.sleep(100);
+      const response = await daemonRequest(paths.socket, { type: "ping" }, 100).catch(
+        () => undefined,
+      );
+      if (response?.ok && response.build === DAEMON_BUILD) return;
+    }
+    throw new Error(`daemon_starting; see ${paths.log}`);
   }
 
-  const entry = process.argv[1];
-  const command = entry && /\.[cm]?[jt]s$/u.test(entry)
-    ? [process.execPath, entry, "daemon", "--run"]
-    : [process.execPath, "daemon", "--run"];
-  const child = Bun.spawn(command, {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-    env: {
-      ...process.env,
-      TMUX_AUTONAME_TMUX_SOCKET: tmux.socketPath,
-    },
-  });
-  child.unref();
-
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await Bun.sleep(50);
-    const response = await daemonRequest(paths.socket, { type: "ping" }, 100).catch(
+  try {
+    running = await daemonRequest(paths.socket, { type: "ping" }, 500).catch(
       () => undefined,
     );
-    if (response?.ok) return;
+    if (!running?.ok && await daemonPidAlive(paths.pid)) {
+      for (let attempt = 0; attempt < 5 && !running?.ok; attempt += 1) {
+        await Bun.sleep(100);
+        running = await daemonRequest(paths.socket, { type: "ping" }, 500).catch(
+          () => undefined,
+        );
+      }
+      if (!running?.ok && await daemonPidAlive(paths.pid)) {
+        throw new Error(`daemon_unresponsive; see ${paths.log}`);
+      }
+    }
+    if (running?.ok && running.build === DAEMON_BUILD) return;
+    if (running?.ok) {
+      await daemonRequest(paths.socket, { type: "shutdown" }, 500).catch(() => undefined);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await Bun.sleep(25);
+        const stale = await daemonRequest(paths.socket, { type: "ping" }, 50).catch(
+          () => undefined,
+        );
+        if (!stale?.ok) break;
+        if (attempt === 19) throw new Error(`stale_daemon; see ${paths.log}`);
+      }
+    }
+
+    const entry = process.argv[1];
+    const command = entry && /\.[cm]?[jt]s$/u.test(entry)
+      ? [process.execPath, entry, "daemon", "--run"]
+      : [process.execPath, "daemon", "--run"];
+    const child = Bun.spawn(command, {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+      env: {
+        ...process.env,
+        TMUX_AUTONAME_TMUX_SOCKET: tmux.socketPath,
+      },
+    });
+    child.unref();
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await Bun.sleep(50);
+      const response = await daemonRequest(paths.socket, { type: "ping" }, 100).catch(
+        () => undefined,
+      );
+      if (response?.ok && response.build === DAEMON_BUILD) return;
+    }
+    await logDiagnostic(paths.log, "daemon_start_failed");
+    throw new Error(`daemon_start_failed; see ${paths.log}`);
+  } finally {
+    await startupLock.close().catch(() => undefined);
+    await unlink(paths.startupLock).catch(() => undefined);
   }
-  await logDiagnostic(paths.log, "daemon_start_failed");
 };
 
 export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
@@ -146,6 +212,7 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
   if (await daemonRequest(paths.socket, { type: "ping" }, 150).catch(() => undefined)) {
     return;
   }
+  if (await daemonPidAlive(paths.pid)) return;
   await unlink(paths.socket).catch(() => undefined);
 
   const config = await loadConfig();
@@ -154,15 +221,19 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
     config,
     ...(config.ai ? { model: new AiSdkModel(config.ai) } : {}),
   });
-  const monitor = config.ai
-    ? new ContentMonitor({
-        tmux,
-        settleMs: config.limits.content_settle_ms,
-        onSettled: (paneId) =>
-          runtime.handle({ version: 1, source: "tmux", kind: "content_settled", paneId }),
-      })
-    : undefined;
-  monitor?.start(config.limits.scan_interval_ms);
+  const monitor = new ContentMonitor({
+    tmux,
+    settleMs: config.limits.content_settle_ms,
+    onChanged: (paneId) =>
+      runtime.handle({ version: 1, source: "tmux", kind: "window_changed", paneId }),
+    ...(config.ai
+      ? {
+          onSettled: (paneId: string) =>
+            runtime.handle({ version: 1, source: "tmux", kind: "content_settled", paneId }),
+        }
+      : {}),
+  });
+  monitor.start(config.limits.scan_interval_ms);
   const buffers = new WeakMap<object, string>();
 
   const listener = Bun.listen<{ handled: boolean }>({
@@ -204,7 +275,7 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
   await logDiagnostic(paths.log, "daemon_started");
 
   const stop = async () => {
-    monitor?.stop();
+    monitor.stop();
     runtime.shutdown();
     listener.stop(true);
     await unlink(paths.socket).catch(() => undefined);
@@ -217,6 +288,29 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
     process.once("SIGTERM", resolve);
     process.once("SIGINT", resolve);
   });
+};
+
+const daemonPidAlive = async (path: string): Promise<boolean> => {
+  const pid = Number.parseInt(await readFile(path, "utf8").catch(() => ""), 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+const acquireStartupLock = async (path: string) => {
+  try {
+    return await open(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const info = await stat(path).catch(() => undefined);
+    if (!info || Date.now() - info.mtimeMs < 10_000) return undefined;
+    await unlink(path).catch(() => undefined);
+    return open(path, "wx", 0o600).catch(() => undefined);
+  }
 };
 
 const handleLine = async (
@@ -233,7 +327,7 @@ const handleLine = async (
   try {
     switch (request.type) {
       case "ping":
-        return { ok: true };
+        return { ok: true, build: DAEMON_BUILD };
       case "event": {
         const event = semanticEventSchema.parse(request.event);
         if (request.wait) return { ok: true, result: await runtime.handle(event) };
@@ -249,6 +343,7 @@ const handleLine = async (
           }),
         };
       case "shutdown":
+        if (request.resetFailures) await runtime.resetFailures();
         setTimeout(() => process.kill(process.pid, "SIGTERM"), 10);
         return { ok: true };
       default:

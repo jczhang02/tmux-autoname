@@ -28,6 +28,7 @@ describe("configuration and credentials", () => {
     expect(config.ai).toBeUndefined();
     expect(config.limits.scan_interval_ms).toBe(3000);
     expect(config.limits.content_settle_ms).toBe(4000);
+    expect(config.limits.request_timeout_ms).toBe(15000);
     expect(config.limits.max_calls_per_window_hour).toBe(6);
   });
 
@@ -145,7 +146,7 @@ name = "OPENAI_API_KEY"
 });
 
 describe("AI SDK model adapter", () => {
-  test("uses real structured-output HTTP transport with one bounded request", async () => {
+  test("uses one bounded JSON request with compatible gateway finish reasons", async () => {
     const requests: Array<{ headers: Headers; body: Record<string, unknown> }> = [];
     const request = nameRequest("Please redesign the tmux naming plugin");
     const server = Bun.serve({
@@ -170,7 +171,7 @@ describe("AI SDK model adapter", () => {
 
       expect(result.task).toBe("redesign naming plugin");
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.body.max_tokens).toBe(64);
+      expect(requests[0]?.body.max_tokens).toBe(512);
       expect(JSON.stringify(requests[0]?.body)).toContain("Please redesign the tmux naming plugin");
       expect(requests[0]?.headers.get("authorization")).toBe(`Bearer ${TEST_API_KEY}`);
     } finally {
@@ -207,6 +208,29 @@ describe("AI SDK model adapter", () => {
       server.stop(true);
     }
   });
+
+  test("classifies malformed provider JSON without exposing the response", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return Response.json(chatCompletion("not-json"));
+      },
+    });
+    try {
+      const model = new AiSdkModel({
+        provider: "openai-compatible",
+        model: "test-model",
+        base_url: `http://127.0.0.1:${server.port}/v1`,
+        supports_structured_outputs: true,
+        confidence_threshold: 0.6,
+        api_key: TEST_API_KEY,
+      });
+      await expect(model.propose(nameRequest("test malformed output"), AbortSignal.timeout(1000)))
+        .rejects.toThrow("invalid_model_response");
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 const nameRequest = (prompt: string): NameRequest => {
@@ -224,6 +248,7 @@ const nameRequest = (prompt: string): NameRequest => {
     windowId: "@1",
     revision: 1,
     fingerprint: evidenceFingerprint(snapshot, candidates, prompt),
+    structureFingerprint: evidenceFingerprint(snapshot, candidates, ""),
     activity: "codex",
     candidates,
     event,
@@ -233,7 +258,7 @@ const nameRequest = (prompt: string): NameRequest => {
   };
 };
 
-const chatCompletion = (proposal: ReturnType<typeof proposalFor>) => ({
+const chatCompletion = (proposal: ReturnType<typeof proposalFor> | string) => ({
   id: "chatcmpl-test",
   object: "chat.completion",
   created: Math.floor(Date.now() / 1000),
@@ -241,8 +266,11 @@ const chatCompletion = (proposal: ReturnType<typeof proposalFor>) => ({
   choices: [
     {
       index: 0,
-      message: { role: "assistant", content: JSON.stringify(proposal) },
-      finish_reason: "stop",
+      message: {
+        role: "assistant",
+        content: typeof proposal === "string" ? proposal : JSON.stringify(proposal),
+      },
+      finish_reason: "other",
     },
   ],
   usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
