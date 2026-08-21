@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -193,6 +194,50 @@ const findStatusCode = (error: unknown): number | undefined => {
 const FIELD_SEPARATOR = "\u001f";
 const TERMINAL_CONTEXT_BYTES = 8 * 1024;
 const TERMINAL_CAPTURE_LINES = 50;
+const PROC_STAT_BYTES = 4 * 1024;
+const PROC_CMDLINE_BYTES = 64 * 1024;
+
+type ProcReader = (path: string, limit: number) => Promise<Buffer>;
+
+const readProc = async (path: string, limit: number): Promise<Buffer> => {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(limit + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > limit) throw new Error("proc_file_limit");
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await file.close();
+  }
+};
+
+const commandBasename = (command: string): string => command.split("/").at(-1) ?? "";
+
+export const resolveSystemdRunCommand = async (
+  panePid: number,
+  reader: ProcReader = readProc,
+): Promise<string | undefined> => {
+  if (!Number.isSafeInteger(panePid) || panePid <= 0) return undefined;
+  try {
+    const stat = (await reader(`/proc/${panePid}/stat`, PROC_STAT_BYTES)).toString("utf8");
+    const commandEnd = stat.lastIndexOf(") ");
+    if (commandEnd < 0) return undefined;
+    const fields = stat.slice(commandEnd + 2).trim().split(/\s+/u);
+    const foregroundPid = Number.parseInt(fields[5] ?? "", 10);
+    if (!Number.isSafeInteger(foregroundPid) || foregroundPid <= 0) return undefined;
+
+    const argv = (await reader(`/proc/${foregroundPid}/cmdline`, PROC_CMDLINE_BYTES))
+      .toString("utf8")
+      .split("\0");
+    if (commandBasename(argv[0] ?? "") !== "systemd-run") return undefined;
+    const separator = argv.indexOf("--");
+    if (separator < 0) return undefined;
+    const executable = argv[separator + 1];
+    return executable ? commandBasename(executable) || undefined : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const tailBytes = (value: string, limit: number): string => {
   const bytes = Buffer.from(value);
@@ -275,8 +320,13 @@ export class TmuxCliPort implements TmuxPort {
     const panes: TmuxPane[] = await Promise.all(
       rows.map(async (fields) => {
         const cwd = fields[6] ?? "";
-        const gitRoot = await this.#gitRoot(cwd);
-        const command = fields[7] ?? "shell";
+        const rawCommand = fields[7] ?? "shell";
+        const pid = Number.parseInt(fields[8] ?? "0", 10) || 0;
+        const [gitRoot, systemdCommand] = await Promise.all([
+          this.#gitRoot(cwd),
+          rawCommand === "systemd-run" ? resolveSystemdRunCommand(pid) : undefined,
+        ]);
+        const command = systemdCommand ?? rawCommand;
         const title = (fields[9] ?? "").slice(0, 200);
         const remoteHost = remoteHostFromTitle(command, title);
         return {
@@ -284,7 +334,7 @@ export class TmuxCliPort implements TmuxPort {
           active: fields[5] === "1",
           cwd,
           command,
-          pid: Number.parseInt(fields[8] ?? "0", 10) || 0,
+          pid,
           title,
           ...(gitRoot ? { gitRoot } : {}),
           ...(remoteHost ? { remoteHost } : {}),

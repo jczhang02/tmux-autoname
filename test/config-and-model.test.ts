@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   AiSdkModel,
   CredentialResolver,
+  resolveSystemdRunCommand,
   runProcess,
   sanitizeTerminalContext,
 } from "../src/adapters";
@@ -107,6 +108,30 @@ name = "OPENAI_API_KEY"
     expect(context.split("\n").length).toBeLessThanOrEqual(50);
     expect(context).not.toContain("abc.def.ghi");
     expect(context).not.toContain("sk-secretvalue123456");
+  });
+
+  test("resolves the executable behind a foreground systemd-run", async () => {
+    const reads: Array<[string, number]> = [];
+    const command = await resolveSystemdRunCommand(41, async (path, limit) => {
+      reads.push([path, limit]);
+      if (path === "/proc/41/stat") {
+        return Buffer.from("41 (zsh) S 1 41 41 34816 900 0 0 0");
+      }
+      return Buffer.from("/usr/bin/systemd-run\0--user\0--wait\0--\0/opt/codex\0resume\0");
+    });
+
+    expect(command).toBe("codex");
+    expect(reads).toEqual([
+      ["/proc/41/stat", 4 * 1024],
+      ["/proc/900/cmdline", 64 * 1024],
+    ]);
+    expect(
+      await resolveSystemdRunCommand(41, async (path) =>
+        Buffer.from(path.endsWith("/stat")
+          ? "41 (zsh) S 1 41 41 34816 900 0 0 0"
+          : "/usr/bin/systemd-run\0--user\0"),
+      ),
+    ).toBeUndefined();
   });
 });
 
