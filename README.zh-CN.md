@@ -7,22 +7,22 @@
 tmux-autoname 根据当前工作内容命名 tmux window，不再只是重复显示前台进程名。
 
 ```text
-codex:tmux-autoname/improve process detection
-pi:partjobs/client-a/review payment flow
-nvim:website/fix mobile navigation
+codex:tmux-autoname/improve-process-detection
+pi:partjobs/client-a/review-payment-flow
+nvim:website/fix-mobile-navigation
 ```
 
 默认格式是 `activity:scope/task`。
 
 - Activity 来自当前 pane 的前台进程。
 - Scope 根据 tmux、cwd、Git 和路径信息生成候选项。模型只能选择本地候选项，不能编造路径。
-- Task 根据有限的终端内容生成，是经过校验的 2 到 5 个英文单词。
+- Task 根据有限的终端内容生成，由 2 到 5 个小写英文单词组成，单词之间使用连字符。
 
 插件异步运行，不会覆盖手动名称，也不会弹出提示或 popup。window tab 上的小徽标会显示当前状态。
 
 ## 工作方式
 
-- 进入子目录后，名称仍会保留这层信息。例如，`partjobs` session 进入 `client-a` 后，可以显示为 `pi:partjobs/client-a/review payment flow`。
+- 进入子目录后，名称仍会保留这层信息。例如，`partjobs` session 进入 `client-a` 后，可以显示为 `pi:partjobs/client-a/review-payment-flow`。
 - 在 Linux 上，进程解析会穿透 `systemd-run` 包装，因此 `codex` 和 `pi` 仍显示自己的名字。
 - 屏幕监控直接读取终端内容，不要求安装 Codex、Claude Code、Pi 或编辑器扩展。
 - 有效信息发生变化并且屏幕稳定后，插件才会调用 AI。重复绘制的 shell prompt 不会产生新请求。

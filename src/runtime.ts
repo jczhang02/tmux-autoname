@@ -8,6 +8,7 @@ import {
   isGroundedScope,
   isMeaningfulCommand,
   normalizeActivity,
+  normalizeTask,
   renderName,
   scopeKey,
   type BadgeState,
@@ -267,7 +268,7 @@ export class AutonameRuntime {
       if (firstRecord || scopeChanged) state.provenance = "fallback";
       if (state.mode === "automatic") await this.#applyRecord(snapshot, state);
       else await this.#save(snapshot.windowId, state);
-    } else if (snapshot.displayProfile !== undefined) {
+    } else {
       const rendered = state.record ? renderName(state.record, state.lastProfile) : "";
       if (rendered && rendered !== state.lastAppliedName && state.mode === "automatic") {
         await this.#applyRecord(snapshot, state);
@@ -542,7 +543,9 @@ export class AutonameRuntime {
     const state: RuntimeWindowState = {
       mode: persisted?.mode ?? "automatic",
       revision: persisted?.revision ?? 0,
-      ...(persisted?.record ? { record: persisted.record } : {}),
+      ...(persisted?.record
+        ? { record: { ...persisted.record, task: normalizeTask(persisted.record.task) } }
+        : {}),
       ...(persisted?.provenance ? { provenance: persisted.provenance } : {}),
       ...(persisted?.manualName ? { manualName: persisted.manualName } : {}),
       ...(persisted?.lastAppliedName ? { lastAppliedName: persisted.lastAppliedName } : {}),

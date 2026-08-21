@@ -70,8 +70,8 @@ The default Display Profile is:
 adjacent separators are omitted. A profile change re-renders the existing
 record without calling AI.
 
-Task is always a concise English action phrase: two to five lower-case words,
-with no trailing punctuation.
+Task is always a concise English action slug: two to five lower-case words
+joined by hyphens, with no other punctuation.
 
 ## 5. Runtime and dependencies
 
@@ -531,7 +531,7 @@ No 24-hour wall-clock test is required.
     repeated password-manager prompts.
 12. Multi-pane windows use the active pane for Activity and do not allow an
     inactive pane to rename the window independently.
-13. Every AI-generated Task is a short English action phrase.
+13. Every AI-generated Task is a short English action slug with hyphen-separated words.
 14. Terminal evidence is bounded, redacted before transport, and absent from
     tmux options, persistent state, and logs.
 15. Inference, including explicit refresh, never exceeds six calls per window

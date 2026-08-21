@@ -7,22 +7,22 @@ English | [简体中文](README.zh-CN.md)
 tmux-autoname gives tmux windows names that describe the current work instead of repeating the foreground executable.
 
 ```text
-codex:tmux-autoname/improve process detection
-pi:partjobs/client-a/review payment flow
-nvim:website/fix mobile navigation
+codex:tmux-autoname/improve-process-detection
+pi:partjobs/client-a/review-payment-flow
+nvim:website/fix-mobile-navigation
 ```
 
 The default format is `activity:scope/task`.
 
 - Activity comes from the active foreground process.
 - Scope comes from tmux, cwd, Git, and path evidence. The model selects from local candidates and cannot invent a path.
-- Task is a validated 2 to 5 word English action phrase generated from a bounded terminal capture.
+- Task is a validated English action slug with 2 to 5 lower-case words joined by hyphens.
 
 The plugin runs asynchronously. It keeps manual names intact and never opens a prompt or popup. A small badge in the window tab reports its state.
 
 ## How it works
 
-- Nested directories remain visible. A `partjobs` session can use a name such as `pi:partjobs/client-a/review payment flow` after you enter `client-a`.
+- Nested directories remain visible. A `partjobs` session can use a name such as `pi:partjobs/client-a/review-payment-flow` after you enter `client-a`.
 - Process detection looks through Linux `systemd-run` wrappers, so tools such as `codex` and `pi` keep their own activity names.
 - The screen monitor works with terminal programs directly. You do not need a Codex, Claude Code, Pi, or editor extension.
 - AI runs after useful evidence changes and the visible screen settles. Duplicate prompt redraws do not trigger another request.

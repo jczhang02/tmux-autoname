@@ -9,7 +9,7 @@ import { AutonameRuntime, type ExplainReport, type RuntimeOutcome } from "./runt
 
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const LOG_LIMIT_BYTES = 64 * 1024;
-export const DAEMON_BUILD = "0.4.0";
+export const DAEMON_BUILD = "0.4.1";
 
 export type RuntimePaths = {
   directory: string;

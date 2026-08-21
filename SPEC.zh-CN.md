@@ -66,7 +66,8 @@ type NameRecord = {
 `scope` 渲染为 `workspace` 或 `workspace/area`。空字段及其相邻分隔符会被省略。
 切换 profile 只重新渲染已有 record，不调用 AI。
 
-Task 始终使用简洁的英文动作短语：由 2 至 5 个小写单词组成，末尾不加标点。
+Task 始终使用简洁的英文动作 slug：由 2 至 5 个小写单词组成，单词之间使用连字符，
+不使用其他标点。
 
 ## 5. 运行时与依赖
 
@@ -487,7 +488,7 @@ Plain 与 Nerd 徽标字符串由自动测试验证；Nerd Font 的最终显示�
 11. 凭据成功解析后，在当前 daemon session 内复用，不反复触发密码管理器提示。
 12. 多 pane window 使用活动 pane 决定 Activity，非活动 pane 不能独立重命名
     window。
-13. 每个 AI 生成的 Task 都是简短的英文动作短语。
+13. 每个 AI 生成的 Task 都是简短的英文动作 slug，单词之间使用连字符。
 14. 终端证据有明确上限，发送前脱敏，且不会出现在 tmux option、持久化状态或日志中。
 15. 包括显式 refresh 在内的推理，每个 window 每小时不超过 6 次，每个 tmux
     server 每小时不超过 30 次。

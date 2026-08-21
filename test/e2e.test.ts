@@ -63,7 +63,7 @@ describe.serial("compiled isolated tmux E2E", () => {
   let label = "";
   let env: Record<string, string>;
   let mode: "valid" | "auth" | "timeout" | "gated" = "valid";
-  let task = "redesign naming plugin";
+  let task = "redesign-naming-plugin";
   let gate = deferred<void>();
   const requests: Record<string, unknown>[] = [];
   const authorizations: Array<string | null> = [];
@@ -290,8 +290,8 @@ circuit_cooldown_ms = 500
     const refreshed = await cli("refresh", "--window", windowId);
     expect(refreshed.stdout).toContain("renamed →");
     await waitFor(async () => requests.length, (value) => value === 1);
-    await waitFor(explain, (value) => value.record?.task === "redesign naming plugin");
-    expect(await name()).toEndWith("/redesign naming plugin");
+    await waitFor(explain, (value) => value.record?.task === "redesign-naming-plugin");
+    expect(await name()).toEndWith("/redesign-naming-plugin");
     expect(requests).toHaveLength(1);
 
     await emitSettled();
@@ -337,7 +337,7 @@ circuit_cooldown_ms = 500
   test("stale AI cannot overwrite Manual Name and auto restores the record", async () => {
     mode = "gated";
     gate = deferred<void>();
-    task = "replace with stale task";
+    task = "replace-with-stale-task";
     const beforeCalls = requests.length;
     await setTerminalContext("Start a different task");
     await waitFor(async () => requests.length, (value) => value === beforeCalls + 1);
@@ -358,7 +358,7 @@ circuit_cooldown_ms = 500
     await waitFor(explain, (value) => value.mode === "automatic");
     expect(await name()).not.toBe("manual e2e name");
     mode = "valid";
-    task = "redesign naming plugin";
+    task = "redesign-naming-plugin";
   });
 
   test("timeout and authentication failures retain the name and set badges", async () => {
@@ -378,11 +378,11 @@ circuit_cooldown_ms = 500
 
   test("circuit breaker, automatic quota, and recovery work through the daemon", async () => {
     mode = "valid";
-    task = "reset failure counter";
+    task = "reset-failure-counter";
     const beforeReset = requests.length;
     await cli("refresh", "--window", windowId);
     await waitFor(async () => requests.length, (value) => value === beforeReset + 1);
-    await waitFor(name, (value) => value.endsWith("/reset failure counter"));
+    await waitFor(name, (value) => value.endsWith("/reset-failure-counter"));
 
     mode = "auth";
     const beforeFailures = requests.length;
@@ -399,15 +399,15 @@ circuit_cooldown_ms = 500
 
     await Bun.sleep(520);
     mode = "valid";
-    task = "recover naming service";
+    task = "recover-naming-service";
     await setTerminalContext("Recover after the cooldown");
     await waitFor(async () => requests.length, (value) => value === afterFailures + 1);
-    await waitFor(name, (value) => value.endsWith("/recover naming service"));
+    await waitFor(name, (value) => value.endsWith("/recover-naming-service"));
 
     let report = await explain();
     let sessionIndex = 0;
     while (report.limits.windowCallsLastHour < 10) {
-      task = `handle quota event ${sessionIndex}`;
+      task = `handle-quota-event-${sessionIndex}`;
       await setTerminalContext(`Quota task ${sessionIndex}`);
       await waitFor(
         explain,

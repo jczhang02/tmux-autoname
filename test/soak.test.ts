@@ -42,7 +42,7 @@ soak(
                 content: JSON.stringify({
                   workspaceId,
                   areaId,
-                  task: "maintain soak window",
+                  task: "maintain-soak-window",
                   taskDecision: "replace",
                   confidence: 0.95,
                 }),

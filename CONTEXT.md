@@ -22,6 +22,7 @@ _Avoid_: Subdirectory, path suffix
 
 **Task**:
 The stable user goal currently being pursued within a Scope. A Task describes intent rather than the latest command, output, or tool.
+It is stored as two to five lower-case English words joined by hyphens.
 _Avoid_: Command, prompt, activity
 
 **Activity**:

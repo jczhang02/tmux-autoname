@@ -411,12 +411,15 @@ export const renderName = (
     .trim();
 };
 
+export const normalizeTask = (task: string): string =>
+  task.replace(/^ +| +$/g, "").replace(/ +/g, "-");
+
 export const isValidTask = (task: string): boolean => {
   if (/[\u0000-\u001f\u007f\u001b]/u.test(task)) return false;
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*(?: [a-z0-9]+(?:-[a-z0-9]+)*){1,4}$/.test(task)) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+){1,4}$/.test(task)) {
     return false;
   }
-  return !/^(?:i cannot|i can't|sorry|here is|the task|unable to)\b/.test(task);
+  return !/^(?:i-cannot|i-cant|sorry|here-is|the-task|unable-to)(?:-|$)/.test(task);
 };
 
 export const acceptProposal = (
@@ -436,7 +439,8 @@ export const acceptProposal = (
     (proposal.areaId !== null && (!area || area.workspaceId !== workspace.id))
   ) return undefined;
 
-  const task = proposal.taskDecision === "keep" ? request.previous?.task : proposal.task;
+  const rawTask = proposal.taskDecision === "keep" ? request.previous?.task : proposal.task;
+  const task = rawTask ? normalizeTask(rawTask) : undefined;
   if (!task || !isValidTask(task)) return undefined;
 
   return {

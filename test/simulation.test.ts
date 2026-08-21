@@ -151,7 +151,7 @@ describe("accelerated logical-time simulation", () => {
 
     expect(model.calls).toHaveLength(3);
     expect(restartedModel.calls).toHaveLength(1);
-    expect(tmux.get("@5").windowName).toEndWith("/recover naming service");
+    expect(tmux.get("@5").windowName).toEndWith("/recover-naming-service");
     expect(clock.timerCount).toBe(0);
   });
 });

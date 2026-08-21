@@ -88,7 +88,7 @@ describe("AutonameRuntime interface", () => {
     expect(model.calls[0]?.terminalContext).toContain("Please redesign");
     expect(model.calls[0]?.previousProvenance).toBe("fallback");
     expect(tmux.get("@1").windowName).toBe(
-      "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+      "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
     );
   });
 
@@ -208,11 +208,11 @@ describe("AutonameRuntime interface", () => {
     second.resolve(proposalFor(model.calls[1]!, "finish current design"));
     const outcome = await refresh;
     expect(outcome.kind).toBe("applied");
-    expect(outcome.name).toEndWith("/finish current design");
+    expect(outcome.name).toEndWith("/finish-current-design");
     first.resolve(proposalFor(model.calls[0]!, "apply stale design"));
     await flush();
 
-    expect(tmux.get("@1").windowName).toEndWith("/finish current design");
+    expect(tmux.get("@1").windowName).toEndWith("/finish-current-design");
     expect(tmux.get("@1").windowName).not.toContain("stale");
   });
 
@@ -316,7 +316,7 @@ describe("AutonameRuntime interface", () => {
     expect(outcome).toEqual({
       kind: "applied",
       windowId: "@1",
-      name: "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+      name: "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
     });
     expect(model.calls).toHaveLength(1);
   });
@@ -360,6 +360,12 @@ describe("AutonameRuntime interface", () => {
     await runtime.handle(event("window_changed"));
 
     expect(tmux.badges.at(-1)).toEqual({ windowId: "@1", badge: "" });
+    expect(tmux.get("@1").windowName).toBe(
+      "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
+    );
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
+      "redesign-naming-plugin",
+    );
   });
 
   test("a restarted runtime replaces an ungrounded persisted Scope", async () => {
@@ -568,10 +574,10 @@ describe("domain rules", () => {
     expect(
       renderName({
         scope: { workspace: "partjobs", area: "a/very/long/manuscript/path" },
-        task: "rewrite patent draft",
+        task: "rewrite-patent-draft",
         activity: "nvim",
       }),
-    ).toBe("nvim:partjobs/a/very/long/manuscript/path/rewrite patent draft");
+    ).toBe("nvim:partjobs/a/very/long/manuscript/path/rewrite-patent-draft");
   });
 
   test("ignores shell prompt redraws when deduplicating evidence", () => {
@@ -592,9 +598,10 @@ describe("domain rules", () => {
   });
 
   test("validates English action phrases and both badge sets", () => {
-    expect(isValidTask("rewrite naming plugin")).toBe(true);
-    expect(isValidTask("Here is a title")).toBe(false);
-    expect(isValidTask("sorry cannot help")).toBe(false);
+    expect(isValidTask("rewrite-naming-plugin")).toBe(true);
+    expect(isValidTask("rewrite naming plugin")).toBe(false);
+    expect(isValidTask("here-is-a-title")).toBe(false);
+    expect(isValidTask("sorry-cannot-help")).toBe(false);
     expect(badgeText("generating", "plain")).toBe("…");
     expect(badgeText("generating", "nerd")).toBe("󰚩");
   });
