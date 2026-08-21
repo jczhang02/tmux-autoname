@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_DIR=$(dirname -- "$SCRIPT_DIR")
+
+if [ -x "$PROJECT_DIR/dist/tmux-autoname" ]; then
+  exec "$PROJECT_DIR/dist/tmux-autoname" "$@"
+fi
+
+if command -v bun >/dev/null 2>&1; then
+  exec bun "$PROJECT_DIR/src/cli.ts" "$@"
+fi
+
+exit 127

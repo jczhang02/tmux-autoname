@@ -1,186 +1,169 @@
-<div align="center">
-  <h1>tmux-autoname</h1>
-  <p>Useful tmux window names derived from what each pane is actually doing.</p>
-  <p>
-    <a href="https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jczhang02/tmux-autoname/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
-    <a href="https://github.com/oven-sh/bun"><img alt="Bun 1.3.14+" src="https://img.shields.io/badge/Bun-1.3.14%2B-fbf0df?style=flat-square&amp;logo=bun&amp;logoColor=black"></a>
-    <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
-  </p>
-</div>
+# tmux-autoname
 
-```text
-shell:dotfiles    nvim:scanner
-pytest:auth       pi:tmux-plugin
+AI-first, event-driven tmux window names with manual ownership.
+
+The default format is `activity:scope/task`, for example
+`codex:tmux-autoname/redesign naming runtime`. Activity is local and immediate;
+Scope is grounded in tmux, cwd, and git evidence; Task is the short English
+action phrase selected by the configured model from the active terminal screen.
+The plugin never truncates the stored name. Normal tmux status-format rules
+control what is visible.
+
+No Codex, Claude Code, Pi, or other Agent extension is installed or required.
+The daemon checks only panes visible in attached tmux clients. It captures a
+small rendered tail after the screen has been quiet, rather than streaming or
+recording terminal output.
+
+## Requirements
+
+- tmux 3.2 or newer
+- Bun 1.3 or newer
+- zsh for the optional shell integration
+
+## Install
+
+```sh
+git clone https://github.com/jczhang02/tmux-autoname ~/.tmux/plugins/tmux-autoname
+cd ~/.tmux/plugins/tmux-autoname
+bun install --frozen-lockfile
+bun run build
 ```
 
-Local heuristics cover shells, editors, tests, and build tools. Coding-agent panes can optionally use [Pi](https://github.com/earendil-works/pi) and an LLM for stable task names. Your manual window names always take priority.
-
-[Quick start](#quick-start) · [Naming](#how-naming-works) · [Configuration](#configuration) · [Privacy](#privacy) · [Commands](#commands)
-
-## Highlights
-
-- **Context-aware names** — uses the active process, working directory, Git root, editor target, or test target instead of a static process title.
-- **Manual control stays authoritative** — a user rename is detected and preserved until that window is explicitly reset.
-- **Local by default** — heuristic naming never calls a model; LLM naming is disabled unless you enable it.
-- **Stable coding-agent names** — successful AI names lock, so a later prompt does not constantly rename the window.
-- **One daemon per tmux server** — kernel locking, server identity checks, and conditional updates prevent duplicate scans and rename races.
-
-## Quick start
-
-### Requirements
-
-- Linux
-- tmux
-- [TPM](https://github.com/tmux-plugins/tpm)
-- [Bun](https://bun.sh/) 1.3.14 or newer
-- `flock` from util-linux
-- Pi only if you enable LLM naming
-
-Add the plugin to `tmux.conf`:
+Add this to `~/.tmux.conf`:
 
 ```tmux
-set -g @plugin 'jczhang02/tmux-autoname'
+run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
 ```
 
-Install plugins with TPM and reload tmux. tmux-autoname starts one background daemon for each real tmux server.
+Then reload tmux:
 
-To load a local checkout instead:
-
-```tmux
-run-shell -b '/path/to/tmux-autoname/tmux-autoname.tmux'
+```sh
+tmux source-file ~/.tmux.conf
 ```
 
-Press `prefix N` to clear tmux-autoname state for the current window and rescan it.
+For zsh lifecycle events, add this to `~/.zshrc`:
 
-> [!NOTE]
-> Rename a window normally whenever you want a permanent custom name. tmux-autoname detects the change and leaves that window alone; use `prefix N` only when you want automatic naming back.
-
-## How naming works
-
-The daemon inspects the active pane in every window on a configurable interval:
-
-| Active work | Naming source | Example |
-| --- | --- | --- |
-| Shell in a Git checkout | Git root or working directory | `shell:dotfiles` |
-| Vim/Neovim | Editor target or project | `nvim:scanner` |
-| Test/build command | Active target and selector | `pytest:auth` |
-| Pi or Claude | Optional LLM-generated task slug | `pi:tmux-plugin` |
-
-Heuristic names can evolve as the active work changes. A successful AI name is locked until reset. Existing custom names, manual renames, and last-second user changes are protected by conditional tmux updates.
-
-## Configuration
-
-The first run creates:
-
-- `$XDG_CONFIG_HOME/tmux-autoname/config.toml`, or
-- `~/.config/tmux-autoname/config.toml` when the XDG path is unset or invalid.
-
-Print the resolved path with:
-
-```bash
-bun bin/tmux-autoname.ts config
+```zsh
+source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
-The generated file is the source of truth for all defaults:
+## Configure AI
+
+Copy [`config/config.example.toml`](config/config.example.toml) to
+`~/.config/tmux-autoname/config.toml`, then set an explicit provider and model.
+Supported providers are `openai`, `anthropic`, and `openai-compatible`.
+
+Credentials are lazy-loaded into daemon memory. Configuration accepts only a
+reference, never a literal key:
 
 ```toml
-# LLM naming is opt-in because it sends terminal data to a provider.
-# There is no automatic secret redaction. Read the Privacy section first.
-[llm]
-enabled = false
-provider = "openai-codex"
-model = "gpt-5.4-mini"
-thinking = "off"
-timeout_seconds = 45
-
-[naming]
-max_len = 24
-poll_seconds = 30
-min_non_empty_lines = 5
-head_lines = 120
-tail_lines = 120
-
-[tools]
-ai = ["pi", "claude"]
-shells = ["bash", "zsh", "fish", "sh"]
-editors = ["nvim", "vim", "vi"]
+# 1Password CLI; use its desktop-app integration to avoid repeated unlocks.
+[ai.credential]
+source = "onepassword"
+ref = "op://Private/OpenAI/api-key"
 ```
 
-`llm.enabled` must be explicitly set to `true`; an empty `ai = []` list disables AI-tool detection entirely.
+```toml
+# Linux Secret Service / system keyring.
+[ai.credential]
+source = "keyring"
+service = "tmux-autoname"
+account = "openai"
+```
 
-## Privacy
+```toml
+# macOS Keychain.
+[ai.credential]
+source = "keychain"
+service = "tmux-autoname"
+account = "openai"
+```
 
-Heuristic naming stays on your machine.
+An environment-variable reference is also supported, but the variable must be
+available to the tmux server process. Run `tmux-autoname secrets reload` after
+changing configuration or rotating a key; it restarts the daemon and reloads
+both. Provider 401/403 responses clear the cached value automatically.
 
-> [!WARNING]
-> LLM naming sends terminal content to the configured model provider. There is no reliable automatic secret redaction. Pane history can contain commands, output, prompts, paths, tokens, and credentials.
+When AI is configured, the provider receives the active pane's rendered tail:
+at most 50 lines and 8 KiB after local redaction of common secret formats. Raw
+screen text is kept in memory only and is never written to tmux options, state,
+or logs. Redaction is best-effort; choose the provider and endpoint accordingly.
 
-For each unlocked AI-tool window—including detached sessions—the plugin:
+The default monitor interval is 3 seconds and the screen must remain unchanged
+for 4 seconds before inference. Only panes visible in attached clients are
+checked. Model calls are capped at six per window and thirty per tmux server per
+hour.
 
-1. Captures the visible active pane and up to 1,000 history lines.
-2. Removes a recognized Pi or Claude startup header.
-3. Samples the configured head and tail line counts, capped at 64 KiB.
-4. Sends the sample, tool name, working directory, and current window name through Pi.
+## Resource and token use
 
-Pi is invoked with tools, sessions, extensions, skills, and context files disabled. `PI_OFFLINE=1` disables Pi's optional package discovery, but it does not block the configured model-provider request. Provider stderr and invalid model output are not copied into persistent logs.
+AI runs only after visible terminal content settles and its evidence changes.
+Explicit refreshes use the same quotas. In a local AI SDK transport test, a
+typical prompt was 1,449 UTF-8 bytes (roughly 400-700 input tokens), while an
+8 KiB terminal-context fixture produced a 9,517-byte prompt (roughly
+2,500-5,000 input tokens). Provider tokenizers and structured-output schema
+accounting vary, so these are measurements rather than billing guarantees.
+Output is capped at 64 tokens.
+
+At the default six-call window quota, that is roughly 2,400-4,200 input tokens
+per window-hour for typical captures, or about 15,000-30,000 if every capture
+is near the limit. For a lower-cost setup:
+
+```toml
+[limits]
+minimum_call_interval_ms = 30000
+max_calls_per_window_hour = 3
+max_calls_per_server_hour = 15
+```
+
+A 30-second local steady-state sample with one attached visible pane averaged
+0.7% CPU; RSS and open file descriptors remained stable. Treat this as a local
+sample, not a hardware-independent guarantee. The release soak test checks for
+unbounded growth over 30 minutes.
+
+## Ownership and status
+
+A non-empty `rename-window` enters manual mode and always wins. Restore
+automation with an empty rename or `tmux-autoname auto`.
+
+Window-tab badges are appended without replacing existing status formats:
+
+| State | Plain | Nerd Font |
+|---|---:|---:|
+| Generating | `…` | `󰚩` |
+| Failed | `!` | `` |
+| Secret unavailable | `K!` | `` |
+| Manual | `M` | `` |
+
+Select the Nerd Font set with:
+
+```tmux
+set -g @tmux-autoname-badge-style 'nerd'
+```
+
+Set `@tmux-autoname-install-badge` to `off` before loading the plugin to manage
+the status fragment yourself. There is no popup or blocking notification.
 
 ## Commands
 
-Run these from the plugin checkout:
-
-| Command | Purpose |
-| --- | --- |
-| `bun bin/tmux-autoname.ts start` | Start the current server's daemon; idempotent and quiet when already running |
-| `bun bin/tmux-autoname.ts status` | Show daemon status for the current tmux server |
-| `bun bin/tmux-autoname.ts stop` | Stop the current server's daemon |
-| `bun bin/tmux-autoname.ts once` | Run one scan when no daemon or scan holds the server lock |
-| `bun bin/tmux-autoname.ts reset-current [@id]` | Clear one window's manual/lock state and rescan |
-| `bun bin/tmux-autoname.ts config` | Print the resolved config path |
-| `bun bin/tmux-autoname.ts daemon` | Run a foreground daemon for debugging |
-
-> [!TIP]
-> `start` should not print an “already running” message during ordinary tmux reloads. If an older installation still does, update the TPM checkout and reload tmux; use `status` when you only want to inspect the daemon.
-
-## Runtime guarantees
-
-- A per-server kernel `flock` excludes duplicate daemons and one-off scans, including concurrent plugin reloads.
-- The daemon fingerprints its loaded source and checkout path, replacing an outdated process after an update.
-- Socket path, server PID, and process start time identify the real tmux server; the daemon exits when that server disappears.
-- Renames and reset consumption use compare-and-set style tmux updates, preserving a manual rename made during a scan or model request.
-- Per-server logs live under `$XDG_STATE_HOME/tmux-autoname` or `~/.local/state/tmux-autoname`, use private permissions, rotate at 1 MiB, and retain bounded history.
-- Lock files live in a private per-user directory beside the tmux socket, so clients with different XDG environments still coordinate.
-
-## Troubleshooting
-
-First check the daemon and resolved config:
-
-```bash
-bun bin/tmux-autoname.ts status
-bun bin/tmux-autoname.ts config
+```text
+tmux-autoname refresh          request immediate inference within quota
+tmux-autoname auto             restore automatic ownership
+tmux-autoname explain          print the full record and safe diagnostics
+tmux-autoname secrets reload   reload configuration and credentials
 ```
 
-If a name should be automatic but is not changing, press `prefix N`: the window may be protected as manual or locked after AI naming. For daemon failures, inspect the private log files under the state directory described above.
+## Test
 
-## Uninstall
-
-1. Run `bun bin/tmux-autoname.ts stop` in every tmux server you use.
-2. Remove the plugin line and let TPM remove the checkout.
-3. Restart tmux to remove the `prefix N` binding and plugin globals.
-4. Optionally delete the `tmux-autoname` XDG config/state directories and its hidden lock directory beside each tmux socket.
-
-## Development
-
-```bash
-bun install --frozen-lockfile
+```sh
 bun run check
+bun run test:e2e
+bun run test:simulation
+bun run test:soak
 ```
 
-`bun run check` runs strict TypeScript validation, the unit/integration test suite, and ShellCheck. GitHub Actions runs the same checks.
+E2E uses an isolated real tmux server and local fake provider. Simulation
+advances 24 hours of logical time. The release soak runs for 30 real minutes;
+no 24-hour wall-clock test is required. A paid-provider smoke test is optional.
 
-| Module | Responsibility |
-| --- | --- |
-| `src/naming-engine.ts` | Preserve, lock, or rename each window |
-| `src/scanner.ts` | Coordinate tmux, process inspection, reset fencing, heuristics, and optional LLM naming |
-| `src/daemon-lifecycle.ts` | Own server identity, daemon records, and locking |
-| `src/tmux-adapter.ts` | Isolate all tmux CLI access |
-| `src/runtime-logger.ts` | Maintain private, bounded runtime logs |
+See [`SPEC.md`](SPEC.md) for the complete behavior contract and
+[`SPEC.zh-CN.md`](SPEC.zh-CN.md) for the Chinese version.

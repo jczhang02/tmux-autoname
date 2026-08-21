@@ -1,20 +1,24 @@
-# LLM naming is opt-in because it sends terminal data to a provider.
-# There is no automatic secret redaction. Read README.md before enabling it.
-[llm]
-enabled = false
-provider = "openai-codex"
-model = "gpt-5.4-mini"
-thinking = "off"
-timeout_seconds = 45
+[ai]
+provider = "openai-compatible"
+model = "your-fast-structured-output-model"
+base_url = "http://127.0.0.1:11434/v1"
+confidence_threshold = 0.6
 
-[naming]
-max_len = 24
-poll_seconds = 30
-min_non_empty_lines = 5
-head_lines = 120
-tail_lines = 120
+[ai.credential]
+source = "env"
+name = "OPENAI_API_KEY"
 
-[tools]
-ai = ["pi", "claude"]
-shells = ["bash", "zsh", "fish", "sh"]
-editors = ["nvim", "vim", "vi"]
+[display]
+profile = "{activity}:{scope}/{task}"
+
+[limits]
+debounce_ms = 1000
+scan_interval_ms = 3000
+content_settle_ms = 4000
+minimum_call_interval_ms = 10000
+request_timeout_ms = 4000
+max_calls_per_window_hour = 6
+max_calls_per_server_hour = 30
+# Lower-cost alternative: 30000 ms, 3 calls/window/hour, 15 calls/server/hour.
+circuit_failure_threshold = 3
+circuit_cooldown_ms = 600000

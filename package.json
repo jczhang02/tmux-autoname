@@ -1,25 +1,31 @@
 {
   "name": "tmux-autoname",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
   "scripts": {
-    "start": "bun bin/tmux-autoname.ts start",
-    "stop": "bun bin/tmux-autoname.ts stop",
-    "status": "bun bin/tmux-autoname.ts status",
-    "daemon": "bun bin/tmux-autoname.ts daemon",
-    "once": "bun bin/tmux-autoname.ts once",
-    "reset-current": "bun bin/tmux-autoname.ts reset-current",
-    "test": "bun test",
+    "build": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/cli.ts --outfile dist/tmux-autoname",
+    "test": "bun test test/config-and-model.test.ts test/integrations.test.ts test/runtime.test.ts test/simulation.test.ts",
+    "test:e2e": "bun run build && bun test test/e2e.test.ts --timeout 30000",
+    "test:simulation": "bun test test/simulation.test.ts",
+    "test:soak": "bun run build && TMUX_AUTONAME_RUN_SOAK=1 TMUX_AUTONAME_SOAK_MS=1800000 bun test test/soak.test.ts --timeout 1900000",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun test && shellcheck tmux-autoname.tmux"
+    "shellcheck": "shellcheck tmux-autoname.tmux bin/tmux-autoname && zsh -n integrations/tmux-autoname.zsh",
+    "check": "bun run typecheck && bun run test && bun run test:e2e && bun run shellcheck"
   },
   "bin": {
-    "tmux-autoname": "bin/tmux-autoname.ts"
+    "tmux-autoname": "bin/tmux-autoname"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.40",
+    "@ai-sdk/openai": "^4.0.44",
+    "@ai-sdk/openai-compatible": "^3.0.32",
+    "ai": "^7.0.70",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14",
-    "typescript": "7.0.2"
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
   }
 }

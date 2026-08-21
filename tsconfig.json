@@ -1,16 +1,13 @@
 {
   "compilerOptions": {
-    "allowImportingTsExtensions": true,
+    "target": "ES2024",
     "module": "Preserve",
     "moduleResolution": "Bundler",
-    "noEmit": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true,
+    "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "strict": true,
-    "target": "ES2022",
+    "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["bin/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
+  "include": ["src", "test"]
 }
