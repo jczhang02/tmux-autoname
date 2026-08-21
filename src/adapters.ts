@@ -153,7 +153,7 @@ export class AiSdkModel implements ModelPort {
 
   async #languageModel(): Promise<LanguageModel> {
     if (this.#model) return this.#model;
-    const apiKey = await this.#credentials.resolve();
+    const apiKey = this.#config.api_key ?? await this.#credentials.resolve();
     switch (this.#config.provider) {
       case "openai":
         this.#model = createOpenAI({ apiKey })(this.#config.model);

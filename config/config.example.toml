@@ -3,6 +3,8 @@ provider = "openai-compatible"
 model = "your-fast-structured-output-model"
 base_url = "http://127.0.0.1:11434/v1"
 confidence_threshold = 0.6
+# Plaintext alternative: api_key = "your-api-key"
+# Remove [ai.credential] below when using api_key.
 
 [ai.credential]
 source = "env"

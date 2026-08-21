@@ -366,7 +366,9 @@ provider 与 model 都是必填配置。插件不提供隐式 provider、默认 
 或 provider 自动 fallback。使用兼容 provider 时还必须明确配置 base URL，使
 请求路由、隐私与计费决策对用户完全可见。
 
-配置只保存引用，不保存 API key 明文。
+配置接受 `api_key` 明文或凭据引用，两者必须二选一。明文方案最简单，但密钥会
+直接保存在磁盘上，因此 README 必须提醒用户将配置文件权限限制为仅本人可读写。
+密码管理器与系统 keyring 场景仍推荐使用凭据引用。
 
 ```json
 {
@@ -470,7 +472,8 @@ Plain 与 Nerd 徽标字符串由自动测试验证；Nerd Font 的最终显示�
 7. AI、provider、网络或凭据失败时，保留有用的已有名称或临时名称。
 8. 修改 profile 或 badge style 不会产生模型调用。
 9. Plain 与 Nerd Font 徽标表示同一套底层状态。
-10. 配置、tmux option、持久化状态与日志中均不存在 provider 密钥明文。
+10. 只有用户显式选择 `api_key` 时，配置文件才保存 provider 密钥明文；密钥绝不
+    出现在 tmux option、持久化状态、日志、prompt 或诊断信息中。
 11. 凭据成功解析后，在当前 daemon session 内复用，不反复触发密码管理器提示。
 12. 多 pane window 使用活动 pane 决定 Activity，非活动 pane 不能独立重命名
     window。

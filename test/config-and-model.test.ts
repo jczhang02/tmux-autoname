@@ -13,6 +13,7 @@ import { proposalFor, windowSnapshot } from "./helpers";
 import { buildScopeCandidates, evidenceFingerprint } from "../src/domain";
 
 const TEST_KEY_NAME = "TMUX_AUTONAME_TEST_API_KEY";
+const TEST_API_KEY = "test-secret";
 
 afterEach(() => {
   delete process.env[TEST_KEY_NAME];
@@ -30,7 +31,7 @@ describe("configuration and credentials", () => {
     expect(config.limits.max_calls_per_window_hour).toBe(6);
   });
 
-  test("parses references and rejects literal API keys", async () => {
+  test("accepts a credential reference or plaintext API key, but not both", async () => {
     const config = await loadConfig("memory", async () => `
 [ai]
 provider = "openai"
@@ -44,6 +45,14 @@ ref = "op://Private/OpenAI/api-key"
       source: "onepassword",
       ref: "op://Private/OpenAI/api-key",
     });
+
+    const plaintext = await loadConfig("memory", async () => `
+[ai]
+provider = "openai"
+model = "fast-model"
+api_key = "plaintext"
+`);
+    expect(plaintext.ai?.api_key).toBe("plaintext");
 
     await expect(
       loadConfig("memory", async () => `
@@ -155,6 +164,7 @@ describe("AI SDK model adapter", () => {
         base_url: `http://127.0.0.1:${server.port}/v1`,
         supports_structured_outputs: true,
         confidence_threshold: 0.6,
+        api_key: TEST_API_KEY,
       });
       const result = await model.propose(request, new AbortController().signal);
 
@@ -162,7 +172,7 @@ describe("AI SDK model adapter", () => {
       expect(requests).toHaveLength(1);
       expect(requests[0]?.body.max_tokens).toBe(64);
       expect(JSON.stringify(requests[0]?.body)).toContain("Please redesign the tmux naming plugin");
-      expect(requests[0]?.headers.get("authorization")).toBeNull();
+      expect(requests[0]?.headers.get("authorization")).toBe(`Bearer ${TEST_API_KEY}`);
     } finally {
       server.stop(true);
     }

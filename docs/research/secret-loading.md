@@ -66,7 +66,9 @@ Sources:
 
 ## Recommended v3 design
 
-Configuration stores a tagged reference, never a literal API key:
+Credential references remain the preferred configuration for password managers
+and system keyrings. The implemented product also permits an explicit plaintext
+`api_key` for users who accept the on-disk tradeoff. The reference form is:
 
 ```json
 {
@@ -110,4 +112,3 @@ disable `.env` and `bunfig.toml` autoloading so changing pane directories cannot
 silently import project credentials.
 
 Source: [Bun standalone executables](https://bun.sh/docs/bundler/executables)
-

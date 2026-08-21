@@ -27,6 +27,7 @@ const aiSchema = z
     base_url: z.string().url().optional(),
     supports_structured_outputs: z.boolean().default(true),
     confidence_threshold: z.number().min(0).max(1).default(0.6),
+    api_key: z.string().min(1).optional(),
     credential: credentialSchema.optional(),
   })
   .strict()
@@ -38,11 +39,18 @@ const aiSchema = z
         message: "base_url is required for openai-compatible",
       });
     }
-    if (value.provider !== "openai-compatible" && !value.credential) {
+    if (value.api_key && value.credential) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["api_key"],
+        message: "api_key and credential are mutually exclusive",
+      });
+    }
+    if (value.provider !== "openai-compatible" && !value.api_key && !value.credential) {
       ctx.addIssue({
         code: "custom",
         path: ["credential"],
-        message: "credential is required for native providers",
+        message: "api_key or credential is required for native providers",
       });
     }
   });

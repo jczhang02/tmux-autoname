@@ -122,8 +122,26 @@ source = "onepassword"
 ref = "op://Private/OpenAI/api-key"
 ```
 
-Only credential references are accepted; literal API keys in the TOML are
-rejected. Available backends are:
+For a plaintext key, replace the `[ai.credential]` table with `api_key` inside
+the `[ai]` table:
+
+```toml
+[ai]
+provider = "openai-compatible"
+model = "your-fast-model"
+base_url = "https://api.example.com/v1"
+api_key = "your-api-key"
+```
+
+`api_key` and `[ai.credential]` are mutually exclusive. A plaintext key is the
+simplest option but is stored directly on disk; restrict the configuration file
+to your user:
+
+```sh
+chmod 600 ~/.config/tmux-autoname/config.toml
+```
+
+Available reference backends are:
 
 | Source | Configuration | Unlock behavior |
 |---|---|---|

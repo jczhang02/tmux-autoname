@@ -195,7 +195,6 @@ it may not invent paths or process identities.
   command output.
 - Agent adapters are explicit opt-in because prompts may be transmitted.
 - Persist only the Name Record and provenance, never raw prompts or pane output.
-- Provider credentials use secret references and session-scoped in-memory
-  caching as documented in
+- Provider credentials use either an explicit plaintext key or secret
+  references with session-scoped in-memory caching as documented in
   [`secret-loading.md`](./secret-loading.md).
-

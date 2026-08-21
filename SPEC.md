@@ -388,7 +388,11 @@ provider, default model, gateway, or automatic provider fallback. A compatible
 provider additionally requires an explicit base URL. This keeps routing,
 privacy, and billing decisions visible to the user.
 
-Configuration stores a reference, never a literal API key.
+Configuration accepts exactly one of a plaintext `api_key` or a credential
+reference. Plaintext is the simplest setup but remains on disk, so the README
+must tell users to restrict the configuration file to their account. Credential
+references remain the recommended option for password-manager and system-keyring
+integration.
 
 ```json
 {
@@ -504,8 +508,9 @@ No 24-hour wall-clock test is required.
    provisional name.
 8. Profile and badge-style changes require no model call.
 9. Plain and Nerd Font badges render the same underlying state.
-10. No plaintext provider secret is stored in configuration, tmux options,
-    persistent state, or logs.
+10. A plaintext provider secret is stored only when the user explicitly selects
+    `api_key`; provider secrets never appear in tmux options, persistent state,
+    logs, prompts, or diagnostics.
 11. A successfully resolved credential is reused for the daemon session without
     repeated password-manager prompts.
 12. Multi-pane windows use the active pane for Activity and do not allow an
