@@ -1,0 +1,19 @@
+{
+  "id": "editor-nvim-implement-csv-parser",
+  "description": "Plain nvim session implementing a new CSV parsing feature in a Rust crate, no agent involved",
+  "category": "editor",
+  "request": {
+    "activity": "nvim",
+    "candidates": [
+      { "id": "c1", "value": "dataload", "root": "/home/user/dev/dataload", "facts": ["git root"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/home/user/dev/dataload", "command": "nvim", "title": "nvim src/parser.rs" },
+    "terminalContext": "src/parser.rs\n1  //! CSV parsing for the ingestion pipeline\n2\n3  pub struct CsvParser {\n4      delimiter: u8,\n5  }\n6\n7  impl CsvParser {\n8      pub fn parse_row(&self, line: &str) -> Vec<String> {\n9          // TODO: handle quoted fields containing the delimiter\n10         line.split(self.delimiter as char).map(String::from).collect()\n11     }\n12 }\n-- INSERT --",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["csv", "parser", "parsing", "implement"]
+  }
+}

@@ -276,4 +276,12 @@ bun run check
 bun run test:soak
 ```
 
+离线命名质量评测会用 `test/eval/fixtures/` 下的真实证据样例给已配置的模型打分。它和 soak 测试一样是可选的，不会包含在 `bun run test` 中（后者只检查样例能否解析、prompt 构造器能否处理它们）：
+
+```sh
+TMUX_AUTONAME_RUN_EVAL=1 bun run eval
+```
+
+它会报告有效性、与每个样例预期 Task 的关键词匹配度、弃权正确性，以及在近似重复证据下的稳定性。
+
 模拟测试会推进 24 小时的逻辑时间，不需要等待 24 小时。行为规范见 [SPEC.md](SPEC.md)，中文版本见 [SPEC.zh-CN.md](SPEC.zh-CN.md)。

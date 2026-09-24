@@ -1,0 +1,19 @@
+{
+  "id": "ssh-remote-deploy-production",
+  "description": "SSH session on a production host rolling out a new release and checking service health",
+  "category": "ssh",
+  "request": {
+    "activity": "ssh",
+    "candidates": [
+      { "id": "c1", "value": "prod-1", "facts": ["remote host: prod-1"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/home/deploy", "command": "ssh", "title": "deploy@prod-1: ~" },
+    "terminalContext": "deploy@prod-1:~$ sudo systemctl stop api\ndeploy@prod-1:~$ sudo cp -r /srv/releases/api-1.9.2 /srv/current\ndeploy@prod-1:~$ sudo systemctl start api\ndeploy@prod-1:~$ sudo systemctl status api\n● api.service - Main API\n   Active: active (running) since Tue 2026-09-23 10:02:11 UTC\ndeploy@prod-1:~$ curl -s localhost:8080/healthz\n{\"status\":\"ok\",\"version\":\"1.9.2\"}",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["deploy", "release", "production", "rollout"]
+  }
+}

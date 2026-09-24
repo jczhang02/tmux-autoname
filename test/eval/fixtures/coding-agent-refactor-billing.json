@@ -1,0 +1,19 @@
+{
+  "id": "coding-agent-refactor-billing",
+  "description": "Claude Code agent extracting invoice fetching into its own service class across several files",
+  "category": "coding-agent",
+  "request": {
+    "activity": "claude",
+    "candidates": [
+      { "id": "c1", "value": "partjobs", "root": "/home/user/dev/partjobs", "facts": ["git root"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/home/user/dev/partjobs/billing", "command": "claude", "title": "claude" },
+    "terminalContext": "I'll extract invoice fetching out of BillingController into a dedicated InvoiceService.\nEditing billing/controller.py to remove the inline SQL query.\nCreating billing/invoice_service.py with fetch_open_invoices and fetch_by_customer.\nUpdating billing/tests/test_controller.py to mock InvoiceService instead of the database.\n$ pytest billing/tests -q\n....\n4 passed in 0.22s\nUpdating the two other callers in reports/monthly.py and admin/console.py to use InvoiceService.",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["billing", "invoice", "refactor", "migrate"]
+  }
+}

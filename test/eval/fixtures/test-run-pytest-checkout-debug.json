@@ -1,0 +1,21 @@
+{
+  "id": "test-run-pytest-checkout-debug",
+  "description": "Settled pane shows only the latest pytest run, but the transcript above it shows edits to checkout.py -- the goal is debugging checkout, not merely 'running pytest'",
+  "category": "test-run",
+  "request": {
+    "activity": "pytest",
+    "candidates": [
+      { "id": "c1", "value": "checkout-service", "root": "/srv/checkout-service", "facts": ["git root"] }
+    ],
+    "event": { "kind": "command_finished", "commandName": "pytest", "exitCode": 1 },
+    "activePane": { "cwd": "/srv/checkout-service", "command": "pytest", "title": "pytest" },
+    "terminalContext": "$ vim checkout/total.py\n(edited apply_discount to round after tax instead of before)\n$ pytest tests/test_checkout.py -q\n...F..\nFAILED tests/test_checkout.py::test_total_with_discount_and_tax - assert 91.0 == 90.99\n$ vim checkout/total.py\n(fixed rounding to two decimal places)\n$ pytest tests/test_checkout.py -q\n......\n6 passed in 0.18s",
+    "supportingPanes": [
+      { "cwd": "/srv/checkout-service", "command": "vim", "title": "vim checkout/total.py" }
+    ]
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["checkout", "fix", "debug", "total", "discount"]
+  }
+}

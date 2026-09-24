@@ -1,0 +1,22 @@
+{
+  "id": "coding-agent-refresh-still-fits",
+  "description": "Explicit re-identification while the same login-flow debugging is still ongoing -- 'keep' the previous Task is as correct an outcome as re-proposing an equivalent one (D5)",
+  "category": "coding-agent",
+  "request": {
+    "previous": { "scope": { "workspace": "webapp" }, "task": "fix-login-flow" },
+    "previousProvenance": "ai",
+    "activity": "codex",
+    "candidates": [
+      { "id": "c1", "value": "webapp", "root": "/home/user/dev/webapp", "facts": ["session container: webapp"] }
+    ],
+    "event": { "kind": "refresh_requested" },
+    "activePane": { "cwd": "/home/user/dev/webapp", "command": "codex", "title": "codex" },
+    "terminalContext": "Still working through auth/session.py -- the expiry check now runs before the password hash comparison, but a second report says the fix doesn't cover refresh tokens.\nReading auth/refresh.py...\nAdding the same expiry guard to the refresh-token path.\n$ pytest tests/test_login.py tests/test_refresh.py -q\n........\n8 passed in 0.51s",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["login", "auth", "fix", "session", "refresh"],
+    "allowKeep": true
+  }
+}

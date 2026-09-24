@@ -1,0 +1,19 @@
+{
+  "id": "ssh-remote-investigate-disk-usage",
+  "description": "SSH session on a remote box tracking down what is filling the disk and cleaning old logs",
+  "category": "ssh",
+  "request": {
+    "activity": "ssh",
+    "candidates": [
+      { "id": "c1", "value": "worker-3", "facts": ["remote host: worker-3"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/var/log", "command": "ssh", "title": "ops@worker-3: /var/log" },
+    "terminalContext": "ops@worker-3:/var/log$ df -h /\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        40G   39G  200M  99% /\nops@worker-3:/var/log$ du -sh * | sort -rh | head -5\n32G  app\n4.1G  nginx\nops@worker-3:/var/log$ ls app | wc -l\n1847\nops@worker-3:/var/log$ find app -name '*.log' -mtime +30 -delete\nops@worker-3:/var/log$ df -h /\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        40G   11G   28G  29% /",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["disk", "cleanup", "clean", "investigate", "space", "logs"]
+  }
+}

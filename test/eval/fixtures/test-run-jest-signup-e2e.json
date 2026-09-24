@@ -1,0 +1,19 @@
+{
+  "id": "test-run-jest-signup-e2e",
+  "description": "Jest e2e suite for the signup flow, several failures around email verification",
+  "category": "test-run",
+  "request": {
+    "activity": "jest",
+    "candidates": [
+      { "id": "c1", "value": "accounts-web", "root": "/home/user/dev/accounts-web", "facts": ["git root"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/home/user/dev/accounts-web", "command": "jest", "title": "jest --watch" },
+    "terminalContext": "FAIL e2e/signup.test.ts\n  Signup flow\n    ✓ renders the signup form (120ms)\n    ✕ sends a verification email after signup (450ms)\n    ✕ activates the account when the verification link is opened (390ms)\n\n  ● Signup flow › sends a verification email after signup\n    expect(mailbox.messages).toHaveLength(1)\n    Received: 0\n\nTests:  2 failed, 1 passed, 3 total",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["signup", "verification", "verify", "email", "activation"]
+  }
+}

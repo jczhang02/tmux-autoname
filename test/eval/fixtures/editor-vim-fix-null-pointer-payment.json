@@ -1,0 +1,19 @@
+{
+  "id": "editor-vim-fix-null-pointer-payment",
+  "description": "vim session adding a null guard in the payment processor after a crash report",
+  "category": "editor",
+  "request": {
+    "activity": "vim",
+    "candidates": [
+      { "id": "c1", "value": "checkout-service", "root": "/srv/checkout-service", "facts": ["git root"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/srv/checkout-service", "command": "vim", "title": "vim payments/processor.go" },
+    "terminalContext": "payments/processor.go\n42  func Charge(card *Card, amount int) error {\n43 -    if card.Token == \"\" {\n43 +    if card == nil || card.Token == \"\" {\n44          return ErrMissingToken\n45      }\n46      // crash report #4821: nil card dereference in Charge()\n47      return gateway.Submit(card, amount)\n48  }",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["payment", "null", "nil", "fix", "crash"]
+  }
+}

@@ -276,4 +276,12 @@ The optional release soak runs for 30 minutes:
 bun run test:soak
 ```
 
+The offline naming-quality eval scores the configured model against realistic evidence fixtures under `test/eval/fixtures/`. It is opt-in, like the soak test, and never runs as part of `bun run test` (which only checks that the fixtures parse and the prompt builder handles them):
+
+```sh
+TMUX_AUTONAME_RUN_EVAL=1 bun run eval
+```
+
+It reports validity, keyword match against each fixture's expected Task, abstention correctness, and stability across near-duplicate evidence.
+
 The simulation advances 24 hours of logical time. It does not wait for 24 hours of wall-clock time. See [SPEC.md](SPEC.md) for the behavior contract and [SPEC.zh-CN.md](SPEC.zh-CN.md) for its Chinese version.

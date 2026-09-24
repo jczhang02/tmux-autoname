@@ -1,0 +1,19 @@
+{
+  "id": "writing-blog-post-async-rust",
+  "description": "nvim session drafting a blog post explaining Rust async runtimes",
+  "category": "writing",
+  "request": {
+    "activity": "nvim",
+    "candidates": [
+      { "id": "c1", "value": "blog", "root": "/home/user/dev/blog", "facts": ["git root"] }
+    ],
+    "event": { "kind": "content_settled" },
+    "activePane": { "cwd": "/home/user/dev/blog/posts", "command": "nvim", "title": "nvim async-runtimes.md" },
+    "terminalContext": "async-runtimes.md\n# How Rust async runtimes actually schedule your futures\n\nWhen you write `async fn`, the compiler turns your function into a state\nmachine that implements `Future`. Nothing runs until something polls it --\nand that something is the runtime's executor.\n\n## The executor loop\n\nTODO: diagram showing the reactor waking a parked task\n-- INSERT --",
+    "supportingPanes": []
+  },
+  "expect": {
+    "abstain": false,
+    "keywords": ["blog", "write", "draft", "article", "post"]
+  }
+}
