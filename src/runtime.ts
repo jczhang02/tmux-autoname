@@ -440,7 +440,13 @@ export class AutonameRuntime {
     forced: boolean,
     active: TmuxPane,
   ): Promise<RuntimeOutcome> {
-    const terminalContext = await this.#tmux.capturePane(active.id).catch(() => "");
+    // ADR 0002 (D2/D4): automatic evidence is bounded to a pane that is
+    // both selected and visible in an attached client. An explicit refresh
+    // (forced) counts as consent to read that one pane even if hidden.
+    const visible = forced || (await this.#isWindowVisible(active.id));
+    const terminalContext = visible
+      ? await this.#tmux.capturePane(active.id).catch(() => "")
+      : "";
     const fingerprint = evidenceFingerprint(snapshot, candidates, terminalContext);
     if (!forced && fingerprint === state.fingerprint) {
       return { kind: "ignored", windowId: snapshot.windowId, reason: "deduplicated" };
@@ -538,9 +544,10 @@ export class AutonameRuntime {
     }
 
     const now = this.#clock.now();
-    // ADR 0002: an explicit refresh is the thing that lifts an auth pause,
-    // whether or not this particular attempt succeeds.
-    if (forced) this.#authPausedReason = undefined;
+    // ADR 0002: forced (explicit refresh) attempts bypass the auth pause
+    // below via #blockedReason's own `!forced` guard; the pause itself is
+    // only lifted once a request actually succeeds (see the try block) or
+    // via an explicit `secrets reload` (see resetFailures).
     const blocked = this.#blockedReason(state, now, forced);
     if (blocked) {
       state.lastError = blocked;
@@ -869,6 +876,20 @@ export class AutonameRuntime {
       return fingerprint === request.structureFingerprint ? snapshot : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * ADR 0002 (D2): a Window's active pane text is only in-bounds while that
+   * Window is the current window of at least one attached client, i.e. its
+   * active pane is one of the clients' current active panes.
+   */
+  async #isWindowVisible(activePaneId: string): Promise<boolean> {
+    try {
+      const active = await this.#tmux.activePanes();
+      return active.includes(activePaneId);
+    } catch {
+      return false;
     }
   }
 }

@@ -53,6 +53,7 @@ export class FakeTmux implements TmuxPort {
   readonly contents = new Map<string, string>();
   readonly renames: Array<{ windowId: string; name: string }> = [];
   readonly badges: Array<{ windowId: string; badge: string }> = [];
+  readonly hiddenPanes = new Set<string>();
   serverState: PersistedServerState | undefined;
 
   add(snapshot: TmuxWindowSnapshot): void {
@@ -87,8 +88,13 @@ export class FakeTmux implements TmuxPort {
   async activePanes(): Promise<string[]> {
     return [...this.snapshots.values()]
       .flatMap((snapshot) => snapshot.panes)
-      .filter((pane) => pane.active)
+      .filter((pane) => pane.active && !this.hiddenPanes.has(pane.id))
       .map((pane) => pane.id);
+  }
+
+  /** Marks a window's active pane as not the current window of any attached client (D2/D4). */
+  hide(paneId: string): void {
+    this.hiddenPanes.add(paneId);
   }
 
   async capturePane(paneId: string): Promise<string> {

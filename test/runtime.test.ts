@@ -10,7 +10,7 @@ import {
   renderName,
   type NameRequest,
 } from "../src/domain";
-import { AutonameRuntime, SecretUnavailableError } from "../src/runtime";
+import { AutonameRuntime, ProviderAuthenticationError, SecretUnavailableError } from "../src/runtime";
 import {
   FakeClock,
   FakeModel,
@@ -36,7 +36,8 @@ const event = (
     | "window_changed"
     | "content_settled"
     | "refresh_requested"
-    | "manual_name_changed",
+    | "manual_name_changed"
+    | "new_work_requested",
   extra: Record<string, unknown> = {},
 ) => ({
   version: 1 as const,
@@ -691,88 +692,384 @@ describe("AutonameRuntime interface", () => {
   });
 });
 
-// Target-behaviour tests for ADR 0001 (docs/adr/0001-stable-window-work-labels.md).
-// Not yet implemented: the runtime still replaces an accepted Task on scope
-// changes (see the "changed terminal content can replace the task" and
-// nested-Scope characterization tests above), and there is no `new` command
-// or model abstention outcome yet. These are placeholders to enable once
-// that work lands; each TODO(ADR-0001) note names the decision it encodes.
-describe("ADR-0001 target behaviour (not yet implemented)", () => {
-  test.todo(
-    "an accepted Task survives a Workspace/scope change with no automatic model call",
-    () => {
-      // TODO(ADR-0001): once a Task is accepted, automation may not replace
-      // it based on a Workspace-boundary crossing. Assert the Name Record's
-      // Task and Workspace are unchanged and that model.calls stays empty
-      // after the active pane's cwd/gitRoot moves to a different Workspace.
-    },
-  );
+// Behaviour tests for ADR 0001 (docs/adr/0001-stable-window-work-labels.md)
+// and ADR 0002's D1-D5 resolved questions.
+describe("ADR-0001 target behaviour", () => {
+  test("an accepted Task survives a Workspace/scope change with no automatic model call", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
 
-  test.todo(
-    "an accepted Task survives a cwd change within the same Workspace with no automatic model call",
-    () => {
-      // TODO(ADR-0001): subdirectory changes within a Workspace never
-      // trigger automatic inference once a Task is accepted (ADR 0002).
-      // Assert the record is untouched and model.calls stays empty.
-    },
-  );
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+    const accepted = await runtime.explain({ windowId: "@1" });
+    expect(accepted.accepted).toBe(true);
 
-  test.todo(
-    "an accepted Task survives the foreground process exiting with no automatic model call",
-    () => {
-      // TODO(ADR-0001): process exit is an explicit non-trigger once a Task
-      // is accepted. Assert a command_finished event after acceptance does
-      // not call the model even for a meaningful command.
-    },
-  );
+    tmux.setPath("@1", "/tmp/a-different-workspace", "/tmp/a-different-workspace");
+    await runtime.handle(event("window_changed"));
 
-  test.todo("refresh keeps the old accepted Task when inference fails", () => {
-    // TODO(ADR-0001)/(D5): re-identification retains the old label when
-    // inference fails. Assert the Name Record's Task is unchanged and an
-    // error badge is shown, but the accepted Task is not discarded.
+    expect(model.calls).toHaveLength(1);
+    const after = await runtime.explain({ windowId: "@1" });
+    expect(after.record).toEqual(accepted.record);
   });
 
-  test.todo("refresh keeps the old accepted Task when the model abstains", () => {
-    // TODO(ADR-0002 D5): abstention is a normal outcome, not an error; it
-    // is not counted by the failure circuit but still consumes quota.
-    // Assert the old Task survives, no error badge appears, and quota is
-    // consumed.
+  test("an accepted Task survives a cwd change within the same Workspace with no automatic model call", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+    const accepted = await runtime.explain({ windowId: "@1" });
+
+    tmux.setPath("@1", "/home/jc/dev/partjobs/a-different-subdirectory");
+    await runtime.handle(event("window_changed"));
+
+    expect(model.calls).toHaveLength(1);
+    expect((await runtime.explain({ windowId: "@1" })).record).toEqual(accepted.record);
   });
 
-  test.todo("refresh replaces the accepted Task on a successful proposal", () => {
-    // TODO(ADR-0001): re-identification retains the old label "until a
-    // replacement is accepted". Assert a successful refresh result
-    // replaces the previously accepted Task.
+  test("an accepted Task survives the foreground process exiting with no automatic model call", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+
+    await runtime.handle({
+      version: 1,
+      source: "zsh",
+      kind: "command_finished",
+      windowId: "@1",
+      commandName: "pytest",
+      exitCode: 0,
+    });
+    await clock.advance(10);
+
+    expect(model.calls).toHaveLength(1);
   });
 
-  test.todo(
+  test("refresh keeps the old accepted Task when inference fails", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    const accepted = await runtime.explain({ windowId: "@1" });
+
+    model.handler = async () => {
+      throw new Error("boom");
+    };
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome.kind).toBe("failed");
+    const after = await runtime.explain({ windowId: "@1" });
+    expect(after.record).toEqual(accepted.record);
+    expect(after.accepted).toBe(true);
+    expect(after.badge.state).toBe("failed");
+  });
+
+  test("refresh keeps the old accepted Task when the model abstains", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    const accepted = await runtime.explain({ windowId: "@1" });
+
+    model.handler = async () => abstainProposal();
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome).toEqual({ kind: "ignored", windowId: "@1", reason: "abstained" });
+    const after = await runtime.explain({ windowId: "@1" });
+    expect(after.record).toEqual(accepted.record);
+    expect(after.accepted).toBe(true);
+    expect(after.badge.state).not.toBe("failed");
+    expect(after.limits.windowCallsLastHour).toBe(2);
+  });
+
+  test("refresh replaces the accepted Task on a successful proposal", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
+      "redesign-naming-plugin",
+    );
+
+    model.handler = async (request) => proposalFor(request, "finish the redesign");
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome.kind).toBe("applied");
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
+      "finish-the-redesign",
+    );
+  });
+
+  test("refresh can accept a fallback Task for the first time via 'keep'", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    await runtime.handle(event("window_changed"));
+    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
+
+    model.handler = async () => keepProposal();
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome).toEqual({ kind: "ignored", windowId: "@1", reason: "abstained" });
+    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
+  });
+
+  test(
     "'new' discards the accepted Task, shows the Workspace-only name, and waits for changed evidence before inferring again",
-    () => {
-      // TODO(ADR-0001 New Work)/(D1): `new` discards the old Task and shows
-      // a Provisional (Workspace-only) name. Per D1, the evidence
-      // fingerprint at `new` time becomes a baseline; no automatic
-      // inference runs while the fingerprint still equals that baseline.
-      // Assert no model call happens on residual on-screen content and one
-      // does happen once the fingerprint changes.
+    async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+
+      const outcome = await runtime.handle(event("new_work_requested"));
+      expect(outcome).toEqual({ kind: "applied", windowId: "@1", name: "codex:partjobs" });
+      const afterNew = await runtime.explain({ windowId: "@1" });
+      expect(afterNew.accepted).toBe(false);
+      expect(afterNew.record).toEqual({
+        scope: { workspace: "partjobs" },
+        task: "",
+        activity: "codex",
+      });
+
+      // D1: residual (unchanged) evidence must not retrigger inference.
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+
+      // Changed, settled evidence is eligible again.
+      tmux.setContent("%1", "User: start a brand new task");
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(2);
     },
   );
 
-  test.todo("manual mode refuses 'new' and asks the user to restore automation first", () => {
-    // TODO(ADR-0001): "In manual mode it refuses the operation and asks
-    // the user to restore automation first." Assert `new` against a
-    // manual-mode window is rejected and the Manual Name is untouched.
+  test("'new' does not reset quotas or affect other windows", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot({ windowId: "@1" }));
+    tmux.add(
+      windowSnapshot({
+        windowId: "@2",
+        sessionName: "proj2",
+        sessionPath: "/tmp/proj2",
+        panes: [{ ...windowSnapshot().panes[0]!, id: "%2" }],
+      }),
+    );
+    const clock = new FakeClock();
+    const cfg = config();
+    cfg.limits.max_calls_per_window_hour = 1;
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+    await runtime.handle(event("content_settled", { windowId: "@1" }));
+    await clock.advance(10);
+    expect((await runtime.explain({ windowId: "@1" })).limits.windowCallsLastHour).toBe(1);
+
+    await runtime.handle(event("new_work_requested", { windowId: "@1" }));
+    expect((await runtime.explain({ windowId: "@1" })).limits.windowCallsLastHour).toBe(1);
+    expect((await runtime.explain({ windowId: "@2" })).accepted).toBe(false);
+    expect((await runtime.explain({ windowId: "@2" })).mode).toBe("automatic");
   });
 
-  test.todo(
-    "after Task acceptance, no further automatic model calls occur regardless of trigger",
-    () => {
-      // TODO(ADR-0001): "Automation may establish but never replace an
-      // accepted Task" / "After a Task is accepted, automatic model calls
-      // stop entirely" (ADR 0002). Assert window_changed, content_settled,
-      // and command_finished events after acceptance never call the model;
-      // only refresh_requested and `new` may.
-    },
-  );
+  test("manual mode refuses 'new' and asks the user to restore automation first", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    tmux.get("@1").windowName = "manual work";
+    await runtime.handle(event("manual_name_changed", { manualName: "manual work" }));
+    expect((await runtime.explain({ windowId: "@1" })).mode).toBe("manual");
+
+    const outcome = await runtime.handle(event("new_work_requested"));
+
+    expect(outcome).toEqual({ kind: "ignored", windowId: "@1", reason: "manual_mode" });
+    expect((await runtime.explain({ windowId: "@1" })).manualName).toBe("manual work");
+    expect(model.calls).toHaveLength(0);
+  });
+
+  test("after Task acceptance, no further automatic model calls occur regardless of trigger", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+
+    tmux.setPath("@1", "/tmp/somewhere-else", "/tmp/somewhere-else");
+    await runtime.handle(event("window_changed"));
+    tmux.setContent("%1", "User: totally different work now");
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    await runtime.handle({
+      version: 1,
+      source: "zsh",
+      kind: "command_finished",
+      windowId: "@1",
+      commandName: "pytest",
+      exitCode: 0,
+    });
+    await clock.advance(10);
+
+    expect(model.calls).toHaveLength(1);
+  });
+
+  test("automatic (non-refresh) triggers never read a hidden window's pane text (D2/D4)", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    tmux.hide("%1");
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+
+    expect(model.calls).toHaveLength(1);
+    expect(model.calls[0]?.terminalContext).toBe("");
+
+    // An explicit refresh counts as consent to read that one pane (D4).
+    const outcome = await runtime.handle(event("refresh_requested"));
+    expect(outcome.kind).toBe("applied");
+    expect(model.calls[1]?.terminalContext).toContain("redesign the tmux window naming plugin");
+  });
+});
+
+describe("ADR-0002 normal outcomes", () => {
+  test("missing AI configuration is a normal outcome, not a failed badge", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const runtime = new AutonameRuntime({ tmux, clock, config: config() });
+
+    const outcome = await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+
+    expect(outcome).toEqual({
+      kind: "ignored",
+      windowId: "@1",
+      reason: "model_not_configured",
+    });
+    const report = await runtime.explain({ windowId: "@1" });
+    expect(report.badge.state).not.toBe("failed");
+    expect(report.lastError).toBe("model_not_configured");
+  });
+
+  test("an auth failure pauses further automatic attempts until a successful refresh", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel(async () => {
+      throw new ProviderAuthenticationError();
+    });
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+    expect((await runtime.explain({ windowId: "@1" })).badge.state).toBe("secret_unavailable");
+
+    // A further automatic trigger is paused, not just deduplicated: change
+    // the evidence so it would otherwise be eligible.
+    tmux.setPath("@1", "/tmp/paused-workspace-1", "/tmp/paused-workspace-1");
+    const blocked = await runtime.handle(event("window_changed"));
+    expect(blocked).toEqual({
+      kind: "ignored",
+      windowId: "@1",
+      reason: "provider_authentication_failed",
+    });
+    expect(model.calls).toHaveLength(1);
+
+    // An explicit refresh is allowed through even while paused; a refresh
+    // that fails again does not lift the pause.
+    const stillFailing = await runtime.handle(event("refresh_requested"));
+    expect(stillFailing.kind).toBe("failed");
+    expect(model.calls).toHaveLength(2);
+    tmux.setPath("@1", "/tmp/paused-workspace-2", "/tmp/paused-workspace-2");
+    const stillBlocked = await runtime.handle(event("window_changed"));
+    expect(stillBlocked).toEqual({
+      kind: "ignored",
+      windowId: "@1",
+      reason: "provider_authentication_failed",
+    });
+    expect(model.calls).toHaveLength(2);
+
+    // A successful refresh (any resolved outcome, including abstention)
+    // lifts the pause going forward.
+    model.handler = async () => abstainProposal();
+    const succeeded = await runtime.handle(event("refresh_requested"));
+    expect(succeeded).toEqual({ kind: "ignored", windowId: "@1", reason: "abstained" });
+    expect(model.calls).toHaveLength(3);
+
+    tmux.setContent("%1", "User: automatic attempts resume");
+    const resumed = await runtime.handle(event("content_settled"));
+    expect(resumed).toEqual({ kind: "scheduled", windowId: "@1" });
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(4);
+  });
+
+  test("secrets reload also lifts the auth pause", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel(async () => {
+      throw new SecretUnavailableError();
+    });
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+
+    await runtime.resetFailures();
+    model.handler = async (request) => proposalFor(request);
+    tmux.setContent("%1", "User: recovered after reload");
+    const outcome = await runtime.handle(event("content_settled"));
+    expect(outcome).toEqual({ kind: "scheduled", windowId: "@1" });
+    await clock.advance(10);
+
+    expect(model.calls).toHaveLength(2);
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
+      "redesign-naming-plugin",
+    );
+  });
 });
 
 describe("domain rules", () => {
