@@ -19,6 +19,7 @@ import {
   type PersistedServerState,
   type PersistedWindowState,
   type SemanticEvent,
+  type TmuxPane,
   type TmuxWindowSnapshot,
 } from "./domain";
 
@@ -232,12 +233,7 @@ export class AutonameRuntime {
     snapshot: TmuxWindowSnapshot,
   ): Promise<RuntimeOutcome> {
     const state = await this.#stateFor(snapshot);
-    state.lastProfile = snapshot.displayProfile ?? this.#config.display.profile;
-    state.badgeStyle = snapshot.badgeStyle ?? state.badgeStyle;
-    if (!state.badgeSynced) {
-      state.badgeSynced = true;
-      await this.#setBadge(snapshot.windowId, state, state.badgeState);
-    }
+    await this.#primeSnapshotState(snapshot, state);
 
     if (event.kind === "manual_name_changed") {
       return this.#handleManual(event, snapshot, state);
@@ -249,6 +245,51 @@ export class AutonameRuntime {
     }
 
     const candidates = buildScopeCandidates(snapshot);
+    const { scopeChanged, activity } = await this.#updateLocalRecord(
+      snapshot,
+      state,
+      candidates,
+      active,
+    );
+
+    if (state.mode === "manual") {
+      await this.#setBadge(snapshot.windowId, state, "manual");
+      return { kind: "manual", windowId: snapshot.windowId, name: state.manualName };
+    }
+
+    const { shouldInfer, forced } = this.#decideTrigger(event, state, scopeChanged);
+    if (!shouldInfer) {
+      return { kind: "ignored", windowId: snapshot.windowId, reason: "no_trigger" };
+    }
+
+    return this.#scheduleOrRun(snapshot, state, candidates, event, activity, forced, active);
+  }
+
+  /** Syncs per-event display settings and clears a stale badge left over from before this runtime tracked the window. */
+  async #primeSnapshotState(
+    snapshot: TmuxWindowSnapshot,
+    state: RuntimeWindowState,
+  ): Promise<void> {
+    state.lastProfile = snapshot.displayProfile ?? this.#config.display.profile;
+    state.badgeStyle = snapshot.badgeStyle ?? state.badgeStyle;
+    if (!state.badgeSynced) {
+      state.badgeSynced = true;
+      await this.#setBadge(snapshot.windowId, state, state.badgeState);
+    }
+  }
+
+  /**
+   * Keeps the local (non-AI) Name Record in sync with deterministic Scope
+   * and Activity, applying or re-rendering it as needed. Returns whether the
+   * local Scope changed and the current Activity, both needed to decide
+   * whether an inference attempt is justified.
+   */
+  async #updateLocalRecord(
+    snapshot: TmuxWindowSnapshot,
+    state: RuntimeWindowState,
+    candidates: ReturnType<typeof buildScopeCandidates>,
+    active: TmuxPane,
+  ): Promise<{ scopeChanged: boolean; activity: string }> {
     const localScope = deterministicScope(candidates);
     const localScopeKey = scopeKey(localScope);
     const scopeChanged =
@@ -275,11 +316,15 @@ export class AutonameRuntime {
       }
     }
 
-    if (state.mode === "manual") {
-      await this.#setBadge(snapshot.windowId, state, "manual");
-      return { kind: "manual", windowId: snapshot.windowId, name: state.manualName };
-    }
+    return { scopeChanged, activity };
+  }
 
+  /** Pure trigger decision: does this event justify an inference attempt, and is it forced (bypasses the minimum call interval)? */
+  #decideTrigger(
+    event: SemanticEvent,
+    state: RuntimeWindowState,
+    scopeChanged: boolean,
+  ): { shouldInfer: boolean; forced: boolean } {
     let shouldInfer = false;
     let forced = false;
 
@@ -299,10 +344,23 @@ export class AutonameRuntime {
       shouldInfer = true;
     }
 
-    if (!shouldInfer) {
-      return { kind: "ignored", windowId: snapshot.windowId, reason: "no_trigger" };
-    }
+    return { shouldInfer, forced };
+  }
 
+  /**
+   * Applies dedup, model-availability, and rate-limit checks to a
+   * justified trigger, then either runs inference immediately (forced) or
+   * debounces it.
+   */
+  async #scheduleOrRun(
+    snapshot: TmuxWindowSnapshot,
+    state: RuntimeWindowState,
+    candidates: ReturnType<typeof buildScopeCandidates>,
+    event: SemanticEvent,
+    activity: string,
+    forced: boolean,
+    active: TmuxPane,
+  ): Promise<RuntimeOutcome> {
     const terminalContext = await this.#tmux.capturePane(active.id).catch(() => "");
     const fingerprint = evidenceFingerprint(snapshot, candidates, terminalContext);
     if (!forced && fingerprint === state.fingerprint) {
