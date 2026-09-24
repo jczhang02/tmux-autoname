@@ -396,6 +396,14 @@ circuit_cooldown_ms = 500
       ],
       { env },
     );
+  const nameOf = async (id: string) =>
+    (await tmux("display-message", "-p", "-t", id, "#{window_name}")).stdout.trim();
+  const explainOf = async (id: string) =>
+    JSON.parse((await cli("explain", "--window", id, "--json")).stdout) as {
+      mode: string;
+      accepted?: boolean;
+      record?: { task: string };
+    };
 
   test("an accepted Task persists across a cwd change and a genuine Workspace change", async () => {
     const beforeCalls = requests.length;
@@ -448,12 +456,6 @@ circuit_cooldown_ms = 500
       )
     ).stdout.trim();
     const [newWindowId, newPaneId] = created.split(":") as [string, string];
-    const nameOf = async (id: string) =>
-      (await tmux("display-message", "-p", "-t", id, "#{window_name}")).stdout.trim();
-    const explainOf = async (id: string) =>
-      JSON.parse((await cli("explain", "--window", id, "--json")).stdout) as {
-        mode: string;
-      };
     await waitFor(() => nameOf(newWindowId), (value) => value === "partjobs");
     await tmux("select-window", "-t", newWindowId);
 
@@ -504,6 +506,68 @@ circuit_cooldown_ms = 500
     await tmux("kill-window", "-t", newWindowId);
     await tmux("select-window", "-t", windowId);
     task = "redesign-naming-plugin";
+  });
+
+  test("an optional key binding is off by default and runs its command for the current window once bound", async () => {
+    mode = "valid";
+    task = "redesign-naming-plugin";
+
+    // No `@tmux-autoname-key-*` option was set before the plugin's initial
+    // load in `beforeAll`, so nothing tmux-autoname-related is bound yet.
+    const beforeBind = (await tmux("list-keys", "-T", "prefix")).stdout;
+    expect(beforeBind).not.toContain("tmux-autoname");
+    expect(beforeBind).not.toContain("TMUX_AUTONAME_BIN");
+
+    // Setting the option and re-sourcing the (idempotent) loader installs
+    // the binding; re-sourcing is already covered as safe by the
+    // "automatic hooks stay silent, idempotent" test above.
+    await tmux("set-option", "-g", "@tmux-autoname-key-new", "M-y");
+    const reloaded = await run(["sh", join(process.cwd(), "tmux-autoname.tmux")], {
+      env: { ...env, TMUX_AUTONAME_BIN: join(process.cwd(), "dist/tmux-autoname") },
+    });
+    expect(reloaded.stdout).toBe("");
+    expect(reloaded.stderr).toBe("");
+    const bound = (await tmux("list-keys", "-T", "prefix")).stdout;
+    expect(bound).toMatch(/\bM-y\b/);
+    expect(bound).toContain("TMUX_AUTONAME_BIN");
+    expect(bound).toContain("new --window #{window_id}");
+
+    const created = (
+      await tmux(
+        "new-window",
+        "-dP",
+        "-F",
+        "#{window_id}:#{pane_id}",
+        "-t",
+        "partjobs:",
+        "-n",
+        "work3",
+        "-c",
+        nested,
+      )
+    ).stdout.trim();
+    const [newWindowId] = created.split(":") as [string, string];
+    await waitFor(() => nameOf(newWindowId), (value) => value === "partjobs");
+    await tmux("select-window", "-t", newWindowId);
+
+    const beforeAccept = requests.length;
+    const accepted = await cli("refresh", "--window", newWindowId);
+    expect(accepted.stdout).toContain("renamed →");
+    await waitFor(async () => requests.length, (value) => value === beforeAccept + 1);
+    await waitFor(() => explainOf(newWindowId), (value) => value.accepted === true);
+
+    // Pressing the bound key (through the client attached in `beforeAll`,
+    // its key table looked up via `-K`) runs `tmux-autoname new` for the
+    // client's current window, exactly as the CLI invocation above did.
+    const client = (await tmux("list-clients", "-F", "#{client_name}")).stdout.trim();
+    expect(client.length).toBeGreaterThan(0);
+    await tmux("send-keys", "-K", "-t", client, "C-b", "M-y");
+
+    await waitFor(() => explainOf(newWindowId), (value) => value.accepted === false);
+    expect(await nameOf(newWindowId)).toBe("partjobs");
+
+    await tmux("kill-window", "-t", newWindowId);
+    await tmux("select-window", "-t", windowId);
   });
 
   test("stale AI cannot overwrite Manual Name and auto restores the record", async () => {
