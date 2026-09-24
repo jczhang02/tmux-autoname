@@ -71,6 +71,17 @@ loader always sets for you):
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
+The loader always resolves the binary to `bin/tmux-autoname` inside its
+own checkout - it never reads `$TMUX_AUTONAME_BIN` back from the process
+environment, so a shell that happens to have it set (e.g. from an old
+install) can't pin the server to a stale binary. To point at a different
+binary on purpose, set `@tmux-autoname-bin` *before* the plugin loads:
+
+```tmux
+set -g @tmux-autoname-bin '/path/to/custom/tmux-autoname'
+run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
+```
+
 ## Agents supported
 
 | Agent | `pane_current_command` | Raw title example | Normalised Task |
@@ -108,8 +119,9 @@ adding it to your pi config's extensions list.
 The Workspace is computed once and then fixed for the life of the
 window (until `clear`):
 
-1. **Session-container rule.** If an ancestor directory of the pane's
-   path has the same basename as the tmux session, use the session name.
+1. **Session-container rule.** If `#{session_path}`'s basename equals the
+   tmux session name, and the pane's path is that directory or under it,
+   use the session name.
 2. **Git repository.** Otherwise, the basename of the main git
    repository (`git rev-parse --path-format=absolute --git-common-dir`).
    A worktree maps to its main repository.
@@ -151,7 +163,8 @@ naming.
 |---|---|---|
 | `@tmux-autoname-agents` | `claude codex pi` | Space-separated `pane_current_command` values that contribute titles |
 | `@tmux-autoname-max-width` | `32` | Display cells before the window name is truncated with `…` |
-| `@tmux-autoname-key-set` | unset | Key, bound in the `prefix` table, that prompts for a pin with the current label prefilled |
+| `@tmux-autoname-bin` | unset | Path to the `tmux-autoname` binary to use, if not the one in this checkout - must be set before the plugin loads |
+| `@tmux-autoname-key-set` | unset | Key, bound in the `prefix` table, that prompts for a pin, prefilled with the current pin or (if unset) the sticky agent title |
 | `@tmux-autoname-key-clear` | unset | Key that clears the current window |
 | `@tmux-autoname-key-pick` | unset | Key that opens `choose-tree` showing full labels |
 
@@ -175,9 +188,19 @@ nothing to configure. Loading the new `tmux-autoname.tmux` migrates a
 prior install automatically: it stops the old daemon, overwrites the old
 indexed hooks, removes the badge fragment it had appended to your
 `window-status-format`/`window-status-current-format`, and unsets its
-obsolete global options. Existing Manual Names (windows you renamed
-yourself) are left untouched. See
-[CHANGELOG.md](CHANGELOG.md) for details.
+obsolete global options.
+
+It also migrates every window's old per-window state
+(`@tmux-autoname-state`, base64-encoded JSON left by the daemon, and
+`@tmux-autoname-badge`): a window the old daemon had in manual mode is kept
+manual (sync will never rename it), one it had in automatic mode is handed
+to the new plugin to name from scratch, and both options are then unset. A
+window with no old state at all, but whose `automatic-rename` was
+explicitly turned off (a plain `tmux rename-window` you did yourself, with
+no tmux-autoname involved), is also treated as manual, so a manual rename
+survives the upgrade either way. If old state exists but can't be decoded,
+the window is treated as manual too - tmux-autoname never overwrites a name
+it isn't sure about. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## Limits
 

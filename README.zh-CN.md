@@ -60,6 +60,16 @@ tmux source-file ~/.tmux.conf
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
+加载脚本总是把可执行文件解析为自己所在 checkout 里的
+`bin/tmux-autoname`——它绝不会从进程环境里读回
+`$TMUX_AUTONAME_BIN`，所以哪怕某个 shell 碰巧带着这个变量（比如来自旧版安装），也不会把服务器钉死在一个过时的二进制上。如果确实想指定另一个二进制，请在插件加载**之前**设置
+`@tmux-autoname-bin`：
+
+```tmux
+set -g @tmux-autoname-bin '/path/to/custom/tmux-autoname'
+run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
+```
+
 ## 支持的 Agent
 
 | Agent | `pane_current_command` | 原始标题示例 | 归一化后的 Task |
@@ -84,7 +94,7 @@ pi 在会话被 `/name` 或某个扩展命名之前，标题一直是 `π - <cwd
 
 Workspace 只计算一次，之后固定不变（直到执行 `clear`）：
 
-1. **会话容器规则。** 如果面板路径的某个祖先目录与 tmux 会话同名，就用会话名。
+1. **会话容器规则。** 如果 `#{session_path}` 的目录名与 tmux 会话同名，且面板路径就是该目录或在其下，就用会话名。
 2. **Git 仓库。** 否则用主仓库的目录名（`git rev-parse
    --path-format=absolute --git-common-dir`）；worktree 会映射到其主仓库。
 3. **目录。** 否则用当前目录名；`$HOME` 显示为 `~`。
@@ -117,7 +127,8 @@ tmux-autoname help
 |---|---|---|
 | `@tmux-autoname-agents` | `claude codex pi` | 贡献标题的 `pane_current_command` 值，空格分隔 |
 | `@tmux-autoname-max-width` | `32` | 窗口名被截断为 `…` 之前的显示宽度 |
-| `@tmux-autoname-key-set` | 未设置 | 绑定在 `prefix` 键表中的按键，弹出以当前 label 预填的输入框来固定标题 |
+| `@tmux-autoname-bin` | 未设置 | 要使用的 `tmux-autoname` 二进制路径，如果不是当前 checkout 里那个——必须在插件加载之前设置 |
+| `@tmux-autoname-key-set` | 未设置 | 绑定在 `prefix` 键表中的按键，弹出输入框固定标题，预填当前固定标题，若没有则预填粘性 Agent 标题 |
 | `@tmux-autoname-key-clear` | 未设置 | 清除当前窗口的按键 |
 | `@tmux-autoname-key-pick` | 未设置 | 打开显示完整 label 的 `choose-tree` 的按键 |
 
@@ -135,7 +146,14 @@ set -g @tmux-autoname-key-pick 'M-p'
 ## 从 0.5 及更早版本升级
 
 0.6 完全移除了 TypeScript/Bun 运行时、推断 daemon、配置文件和窗口标签徽章——没有需要构建或配置的东西。加载新的 `tmux-autoname.tmux` 会自动迁移旧安装：停止旧 daemon、覆盖旧的带索引钩子、从你的
-`window-status-format`/`window-status-current-format` 中移除它曾追加的徽章片段，并清除它的过时全局选项。你自己手动改名的窗口（Manual Name）不受影响。详见
+`window-status-format`/`window-status-current-format` 中移除它曾追加的徽章片段，并清除它的过时全局选项。
+
+它还会迁移每个窗口旧的逐窗口状态（`@tmux-autoname-state`，旧 daemon 留下的
+base64 编码 JSON，以及 `@tmux-autoname-badge`）：旧 daemon 处于 manual 模式的窗口会保持
+manual（sync 永远不会改它的名字）；处于 automatic 模式的窗口会交给新插件从头命名；随后这两个选项都会被清除。完全没有旧状态、但
+`automatic-rename` 被显式关闭的窗口（也就是你自己直接 `tmux rename-window`
+过、和 tmux-autoname 无关的窗口）同样会被当作 manual，所以不管哪种情况，手动改名都能在升级后保留下来。如果旧状态存在但无法解码，该窗口也会被当作
+manual——tmux-autoname 从不覆盖一个它不确定的名字。详见
 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 局限

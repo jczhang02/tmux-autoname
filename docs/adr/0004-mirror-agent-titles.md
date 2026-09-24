@@ -47,11 +47,12 @@ agent exit and is replaced only when an agent in the Window reports a
 different meaningful title. When several agent panes share a Window, the
 active pane wins. Activity, cwd, focus, and output never change the Task.
 
-**Workspace.** The session-container rule is unchanged: use the session name
-when an ancestor of the pane path has the same basename. Otherwise use the
-basename of the main Git repository, with worktrees mapping to their main
-repository, and finally the basename of the directory. The Workspace is fixed
-once a title is recorded, and follows the pane path until then.
+**Workspace.** The session-container rule: use the session name when
+`#{session_path}`'s basename equals the session name and the pane path is
+`session_path` itself or under it. Otherwise use the basename of the main
+Git repository, with worktrees mapping to their main repository, and
+finally the basename of the directory. The Workspace is fixed once a title
+is recorded, and follows the pane path until then.
 
 **Display.** The label is `<workspace>/<title>`, or `<workspace>` when there is
 no title. The full label is stored in `@tmux-autoname-label`. The window name
