@@ -99,6 +99,10 @@ tmux set-hook -g 'after-select-window[120]' "$sync_window_cmd"
 tmux set-hook -g 'window-pane-changed[120]' "$sync_window_cmd"
 tmux set-hook -g 'after-split-window[120]' "$sync_window_cmd"
 tmux set-hook -g 'client-attached[120]' "$sync_window_cmd"
+# The plugin loads before the first session exists (TPM/run-shell fires at
+# tmux server start), so the loader's own final sync below can't reach that
+# session's first window yet. session-created covers it.
+tmux set-hook -g 'session-created[120]' "$sync_window_cmd"
 
 # An empty `rename-window ""` restores automatic naming. Nested one level
 # deeper than the plain sync hooks above (inside if-shell's command
@@ -128,4 +132,16 @@ if [ -n "$key_pick" ]; then
     choose-tree -Zw -F "#{window_index}: #{@tmux-autoname-label}"
 fi
 
-tmux run-shell -b "'${bin_q}' sync >/dev/null 2>&1 || true"
+# Sync every window on every session, not just the current one: the loader
+# runs once at tmux server start, before session-created has had a chance
+# to fire for anything, so this is what actually names the very first
+# window (and any other windows already restored by, e.g., tmux-resurrect).
+#
+# run-shell format-expands its own command argument before handing it to
+# the shell (the same mechanism the hook commands above rely on for
+# #{window_id}/#{pane_id}), so the nested `list-windows -F '#{window_id}'`
+# has to be double-hashed (##{window_id}) - otherwise tmux replaces it up
+# front with a single literal window id (the current window's), and every
+# loop iteration below ends up syncing the same window.
+sync_all_cmd="for w in \$(tmux list-windows -a -F '##{window_id}'); do '${bin_q}' sync -t \"\$w\" >/dev/null 2>&1 || true; done"
+tmux run-shell -b "$sync_all_cmd"
