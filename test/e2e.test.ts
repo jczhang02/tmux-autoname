@@ -64,6 +64,7 @@ describe.serial("compiled isolated tmux E2E", () => {
   let env: Record<string, string>;
   let mode: "valid" | "auth" | "timeout" | "gated" = "valid";
   let task = "redesign-naming-plugin";
+  let controlClient: ReturnType<typeof Bun.spawn> | undefined;
   let gate = deferred<void>();
   const requests: Record<string, unknown>[] = [];
   const authorizations: Array<string | null> = [];
@@ -71,7 +72,16 @@ describe.serial("compiled isolated tmux E2E", () => {
   const modelServer = Bun.serve({
     port: 0,
     async fetch(request) {
-      const body = (await request.json()) as Record<string, unknown>;
+      // Guard against stray, non-API probe requests to this ephemeral port
+      // (e.g. a sandbox health check): only real POST /v1/... calls from
+      // the AI SDK have a JSON body worth parsing.
+      if (request.method !== "POST") return new Response("not found", { status: 404 });
+      let body: Record<string, unknown>;
+      try {
+        body = (await request.json()) as Record<string, unknown>;
+      } catch {
+        return new Response("bad request", { status: 400 });
+      }
       requests.push(body);
       authorizations.push(request.headers.get("authorization"));
       if (mode === "auth") {
@@ -94,10 +104,10 @@ describe.serial("compiled isolated tmux E2E", () => {
             message: {
               role: "assistant",
               content: JSON.stringify({
+                outcome: "propose",
                 workspaceId,
                 areaId,
                 task,
-                taskDecision: "replace",
                 confidence: 0.95,
               }),
             },
@@ -241,10 +251,30 @@ circuit_cooldown_ms = 500
     ).stdout.trim();
     [windowId, paneId] = created.split(":") as [string, string];
     await waitFor(name, (value) => value === "zsh:partjobs/high-value-patent-rebuild/manuscript");
+
+    // ADR 0002 (D2): automatic evidence capture requires the window to be
+    // the current window of at least one attached client. This session is
+    // otherwise headless, so attach a real (control-mode, no PTY needed)
+    // client and keep it pointed at `windowId` so the automatic paths under
+    // test behave like a real, attended session.
+    // Control-mode clients read commands from stdin; a closed stdin reads
+    // as EOF and the client exits immediately, so it must stay open (even
+    // though nothing is ever written to it).
+    controlClient = Bun.spawn(["tmux", "-L", label, "-C", "attach-session", "-t", "partjobs"], {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    await waitFor(
+      async () => (await tmux("list-clients", "-F", "#{client_name}")).stdout.trim(),
+      (value) => value.length > 0,
+    );
+    await tmux("select-window", "-t", windowId);
   }, 15000);
 
   afterAll(async () => {
     await cli("daemon", "--stop").catch(() => undefined);
+    controlClient?.kill();
     await tmux("kill-server").catch(() => undefined);
     modelServer.stop(true);
     if (testRoot) await rm(testRoot, { recursive: true, force: true });
@@ -334,18 +364,155 @@ circuit_cooldown_ms = 500
     );
   });
 
+  const cdPane = async (target: string, directory: string) => {
+    await tmux("send-keys", "-t", target, "C-u");
+    await tmux("send-keys", "-t", target, `cd ${directory}`, "Enter");
+    await waitFor(
+      async () =>
+        (await tmux("display-message", "-p", "-t", target, "#{pane_current_path}")).stdout.trim(),
+      (value) => value === directory,
+    );
+  };
+  const emitEvent = (kind: string, target: { windowId: string; paneId?: string }) =>
+    run(
+      [
+        join(process.cwd(), "dist/tmux-autoname"),
+        "emit",
+        "--source",
+        "tmux",
+        "--kind",
+        kind,
+        "--window",
+        target.windowId,
+        ...(target.paneId ? ["--pane", target.paneId] : []),
+      ],
+      { env },
+    );
+
+  test("an accepted Task persists across a cwd change and a genuine Workspace change", async () => {
+    const beforeCalls = requests.length;
+    expect((await explain()).record?.task).toBe("redesign-naming-plugin");
+
+    // A subdirectory move within the same Workspace never triggers
+    // automatic inference (ADR 0002), let alone replaces an accepted Task.
+    const sibling = join(workspace, "another-directory");
+    await mkdir(sibling, { recursive: true });
+    await cdPane(paneId, sibling);
+    await emitEvent("window_changed", { windowId, paneId });
+    await Bun.sleep(100);
+    expect(await name()).toContain("partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin");
+    expect(requests).toHaveLength(beforeCalls);
+
+    // A genuine cross-Workspace move must not touch it either: Workspace
+    // affiliation is fixed once the Task is accepted (ADR 0001).
+    const otherWorkspace = join(testRoot, "otherproj");
+    await mkdir(otherWorkspace, { recursive: true });
+    await cdPane(paneId, otherWorkspace);
+    await emitEvent("window_changed", { windowId, paneId });
+    await Bun.sleep(100);
+    expect(await name()).toContain("partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin");
+    expect(requests).toHaveLength(beforeCalls);
+
+    await cdPane(paneId, nested);
+    await emitEvent("window_changed", { windowId, paneId });
+  });
+
+  test("'new' discards the Task, shows a Workspace-only name, refuses in manual mode, and baselines evidence (D1)", async () => {
+    mode = "valid";
+    task = "redesign-naming-plugin";
+    const created = (
+      await tmux(
+        "new-window",
+        "-dP",
+        "-F",
+        "#{window_id}:#{pane_id}",
+        "-t",
+        "partjobs:",
+        "-n",
+        "work2",
+        "-c",
+        nested,
+        // A bare, unthemed shell: the D1 baseline check below needs two
+        // captures of genuinely unchanged evidence to compare equal, which
+        // a themed interactive prompt (clock, async git segments, ...)
+        // cannot guarantee.
+        "zsh -f",
+      )
+    ).stdout.trim();
+    const [newWindowId, newPaneId] = created.split(":") as [string, string];
+    const nameOf = async (id: string) =>
+      (await tmux("display-message", "-p", "-t", id, "#{window_name}")).stdout.trim();
+    const explainOf = async (id: string) =>
+      JSON.parse((await cli("explain", "--window", id, "--json")).stdout) as {
+        mode: string;
+      };
+    await waitFor(() => nameOf(newWindowId), (value) => value === "zsh:partjobs/high-value-patent-rebuild/manuscript");
+    await tmux("select-window", "-t", newWindowId);
+
+    const beforeAccept = requests.length;
+    const accepted = await cli("refresh", "--window", newWindowId);
+    expect(accepted.stdout).toContain("renamed →");
+    await waitFor(async () => requests.length, (value) => value === beforeAccept + 1);
+    await waitFor(() => nameOf(newWindowId), (value) => value.endsWith("/redesign-naming-plugin"));
+
+    // Manual mode refuses `new` and leaves the Manual Name untouched.
+    await tmux("rename-window", "-t", newWindowId, "manual for new");
+    await waitFor(() => explainOf(newWindowId), (value) => value.mode === "manual");
+    const refused = await run(
+      [join(process.cwd(), "dist/tmux-autoname"), "new", "--window", newWindowId],
+      { env, allowFailure: true },
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(await nameOf(newWindowId)).toBe("manual for new");
+    await tmux("rename-window", "-t", newWindowId, "");
+    await waitFor(() => explainOf(newWindowId), (value) => value.mode === "automatic");
+
+    // `new` discards the Task, shows a Workspace-only name, and does not
+    // call the model.
+    const beforeNew = requests.length;
+    const started = await cli("new", "--window", newWindowId);
+    expect(started.stdout).toContain("new work →");
+    await waitFor(() => nameOf(newWindowId), (value) => value === "zsh:partjobs");
+    expect(requests).toHaveLength(beforeNew);
+
+    // D1: residual (unchanged) evidence must not retrigger inference.
+    await emitEvent("content_settled", { windowId: newWindowId, paneId: newPaneId });
+    await Bun.sleep(100);
+    expect(requests).toHaveLength(beforeNew);
+
+    // Changed, settled evidence is eligible again.
+    task = "start-something-new";
+    await tmux("send-keys", "-t", newPaneId, "C-u");
+    await tmux("send-keys", "-l", "-t", newPaneId, "Task: start something brand new");
+    await waitFor(
+      async () => (await tmux("capture-pane", "-p", "-t", newPaneId)).stdout,
+      (value) => value.includes("start something brand new"),
+    );
+    await Bun.sleep(50);
+    await emitEvent("content_settled", { windowId: newWindowId, paneId: newPaneId });
+    await waitFor(() => nameOf(newWindowId), (value) => value.endsWith("/start-something-new"));
+    expect(requests).toHaveLength(beforeNew + 1);
+
+    await tmux("kill-window", "-t", newWindowId);
+    await tmux("select-window", "-t", windowId);
+    task = "redesign-naming-plugin";
+  });
+
   test("stale AI cannot overwrite Manual Name and auto restores the record", async () => {
     mode = "gated";
     gate = deferred<void>();
     task = "replace-with-stale-task";
     const beforeCalls = requests.length;
-    await setTerminalContext("Start a different task");
+    // The Task is already accepted (ADR 0001), so only an explicit refresh
+    // -- not further automatic evidence -- can still reach the model.
+    const pending = cli("refresh", "--window", windowId);
     await waitFor(async () => requests.length, (value) => value === beforeCalls + 1);
 
     await tmux("rename-window", "-t", windowId, "manual e2e name");
     await waitFor(explain, (value) => value.mode === "manual");
     expect(await badge()).toBe("M");
     gate.resolve();
+    await pending;
     await Bun.sleep(150);
     expect(await name()).toBe("manual e2e name");
     await cli("daemon", "--stop");
@@ -392,6 +559,8 @@ circuit_cooldown_ms = 500
       await waitFor(badge, (value) => value === "K!");
     }
     const afterFailures = requests.length;
+    // The Task is already accepted (ADR 0001), so further automatic
+    // evidence must never reach the model regardless of circuit state.
     await setTerminalContext("This call must be blocked");
     await Bun.sleep(50);
     expect(requests).toHaveLength(afterFailures);
@@ -400,7 +569,9 @@ circuit_cooldown_ms = 500
     await Bun.sleep(520);
     mode = "valid";
     task = "recover-naming-service";
-    await setTerminalContext("Recover after the cooldown");
+    // Only an explicit refresh -- not automatic evidence -- can replace an
+    // already-accepted Task, so recovery after cooldown is exercised here.
+    await cli("refresh", "--window", windowId);
     await waitFor(async () => requests.length, (value) => value === afterFailures + 1);
     await waitFor(name, (value) => value.endsWith("/recover-naming-service"));
 
@@ -408,19 +579,23 @@ circuit_cooldown_ms = 500
     let sessionIndex = 0;
     while (report.limits.windowCallsLastHour < 10) {
       task = `handle-quota-event-${sessionIndex}`;
-      await setTerminalContext(`Quota task ${sessionIndex}`);
-      await waitFor(
-        explain,
-        (value) => value.limits.windowCallsLastHour > report.limits.windowCallsLastHour,
-      );
+      await cli("refresh", "--window", windowId);
       report = await explain();
       sessionIndex += 1;
     }
+    expect(report.limits.windowCallsLastHour).toBe(10);
     const atQuota = requests.length;
     await setTerminalContext("This automatic call must not run");
     await Bun.sleep(100);
     expect(requests).toHaveLength(atQuota);
     expect((await explain()).limits.windowCallsLastHour).toBe(10);
+
+    // ADR 0002: quota exhaustion is a normal outcome, not an error badge,
+    // even for an explicit refresh.
+    const blockedRefresh = await cli("refresh", "--window", windowId);
+    expect(blockedRefresh.stdout).toContain("quota reached");
+    expect(requests).toHaveLength(atQuota);
+    expect(await badge()).not.toBe("!");
   });
 
   test("daemon restart restores safe persisted state", async () => {
@@ -436,6 +611,8 @@ circuit_cooldown_ms = 500
       serverCallsLastHour: before.limits.serverCallsLastHour,
     });
     const requestCount = requests.length;
+    // Blocked by both the restored quota and the accepted-Task guard
+    // (ADR 0001/0002), across the restart.
     await setTerminalContext("Do not bypass the restored quota");
     await Bun.sleep(100);
     expect(requests).toHaveLength(requestCount);
