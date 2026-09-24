@@ -1,7 +1,6 @@
 # Work-label inference policy
 
-Status: Accepted; the Open questions section blocks implementation of the
-affected parts. Date: 2026-09-23.
+Status: Accepted. Date: 2026-09-23.
 
 ## Context
 
@@ -88,13 +87,26 @@ SPEC.md / SPEC.zh-CN.md changes required at implementation:
   auth failure pausing automatic attempts is resolved by explicit refresh or
   `secrets reload`, matching the decision above.
 
-## Open questions
+## Resolved questions
 
-- Evidence boundary after `new`: how residual on-screen content from the
-  discarded Task is excluded from the next inference attempt.
-- Concurrent observation across panes when more than one pane is visible in
-  an attached client.
-- Acceptance of a stale in-flight inference relative to SPEC.md section 12's
-  revision/fingerprint fencing.
-- Explicit requests (for example, refresh) that target a hidden or
-  non-visible pane.
+**Evidence boundary after `new`.** At `new` time, the current evidence
+fingerprint is recorded as a baseline. No automatic inference runs while the
+fingerprint still equals that baseline; the next attempt requires changed,
+settled evidence, so residual on-screen content from the discarded Task
+cannot by itself trigger a fresh attempt.
+
+**Concurrent observation.** Only the Window's active pane text is used, and
+only while that Window is the current window of at least one attached
+client. Other panes contribute local Workspace metadata only, never their
+rendered text, consistent with the evidence-limits decision above.
+
+**Stale in-flight inference.** Revision and fingerprint fencing (SPEC.md
+section 12) is kept: `new`, manual rename, and refresh each increment the
+revision, and a result whose revision or fingerprint no longer matches is
+discarded. Once a Task is accepted, any other in-flight automatic request for
+that Window is aborted or discarded.
+
+**Explicit requests on hidden windows.** An explicit `refresh` (or a
+keybinding invoking it) targeting a Window counts as consent to read that
+Window's active pane text even when it is not currently visible; the read
+stays bounded to that one pane.

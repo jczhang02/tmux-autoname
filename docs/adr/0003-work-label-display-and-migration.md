@@ -70,3 +70,10 @@ SPEC.md / SPEC.zh-CN.md changes required at implementation:
   `NameProposalSchema`.
 - Release notes, README.md, and README.zh-CN.md: add disclosure of the
   one-time display-format change and the Area removal.
+- `tmux-autoname.tmux`: update the seeded `@tmux-autoname-profile` default
+  from `{activity}:{scope}/{task}` to `{scope}/{task}`; that tmux option
+  takes precedence over the config file default at `src/adapters.ts`
+  (~lines 325, 365, 388), so leaving it unchanged would silently keep every
+  installed user on the old display format.
+- `config/config.example.toml`: update the example `[display] profile`
+  value to match the new `{scope}/{task}` default.
