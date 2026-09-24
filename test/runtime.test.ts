@@ -508,6 +508,253 @@ describe("AutonameRuntime interface", () => {
     expect((await runtime.explain({ windowId: "@1" })).badge.text).toBe("");
     expect(model.calls).toHaveLength(0);
   });
+
+  // Characterization tests for #handleLocked (manual mode, dedup, rate-limit
+  // blocking, debounce, refresh forcing) pinned before the STAGE 2 refactor
+  // that splits it into #primeSnapshotState / #updateLocalRecord /
+  // #decideTrigger / #scheduleOrRun. These must stay green across that
+  // refactor with zero behaviour change.
+  describe("characterization: manual mode, dedup, rate limits, debounce, refresh", () => {
+    test("manual mode never triggers automatic inference, regardless of event kind", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+      tmux.get("@1").windowName = "manual work";
+      await runtime.handle(event("manual_name_changed", { manualName: "manual work" }));
+      expect((await runtime.explain({ windowId: "@1" })).mode).toBe("manual");
+
+      tmux.setPath("@1", "/home/jc/dev/partjobs/other-area");
+      await runtime.handle(event("window_changed"));
+      tmux.setContent("%1", "User: totally different task now");
+      await runtime.handle(event("content_settled"));
+      await runtime.handle(event("refresh_requested"));
+      await clock.advance(1000);
+
+      expect(model.calls).toHaveLength(0);
+      expect(tmux.get("@1").windowName).toBe("manual work");
+    });
+
+    test("debounces automatic inference until the configured delay elapses", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const cfg = config();
+      cfg.limits.debounce_ms = 50;
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+      const outcome = await runtime.handle(event("content_settled"));
+      expect(outcome.kind).toBe("scheduled");
+      expect(model.calls).toHaveLength(0);
+
+      await clock.advance(40);
+      expect(model.calls).toHaveLength(0);
+
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+    });
+
+    test("blocks an automatic retry within the minimum call interval", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const cfg = config();
+      cfg.limits.minimum_call_interval_ms = 5000;
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+
+      tmux.setContent("%1", "User: investigate daemon resource usage");
+      const outcome = await runtime.handle(event("content_settled"));
+
+      expect(outcome).toEqual({
+        kind: "ignored",
+        windowId: "@1",
+        reason: "minimum_interval",
+      });
+      expect(model.calls).toHaveLength(1);
+      expect((await runtime.explain({ windowId: "@1" })).lastError).toBe("minimum_interval");
+    });
+
+    test("forced refresh bypasses the minimum call interval that blocks automatic retries", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const cfg = config();
+      cfg.limits.minimum_call_interval_ms = 5000;
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+
+      const outcome = await runtime.handle(event("refresh_requested"));
+
+      expect(outcome.kind).toBe("applied");
+      expect(model.calls).toHaveLength(2);
+    });
+
+    test("blocks inference once the server-wide hourly quota is exhausted", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot({ windowId: "@1" }));
+      tmux.add(
+        windowSnapshot({
+          windowId: "@2",
+          sessionName: "proj2",
+          sessionPath: "/tmp/proj2",
+          panes: [
+            {
+              id: "%2",
+              active: true,
+              cwd: "/tmp/proj2",
+              command: "zsh",
+              pid: 200,
+              title: "zsh",
+            },
+          ],
+        }),
+      );
+      const clock = new FakeClock();
+      const model = new FakeModel();
+      const cfg = config();
+      cfg.limits.max_calls_per_server_hour = 1;
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+      await runtime.handle(event("content_settled", { windowId: "@1" }));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+
+      const outcome = await runtime.handle(event("content_settled", { windowId: "@2" }));
+      await clock.advance(10);
+
+      expect(outcome).toEqual({
+        kind: "ignored",
+        windowId: "@2",
+        reason: "server_quota",
+      });
+      expect(model.calls).toHaveLength(1);
+      expect((await runtime.explain({ windowId: "@2" })).lastError).toBe("server_quota");
+    });
+
+    test("blocks inference while the failure circuit is open, even for a forced refresh", async () => {
+      const tmux = new FakeTmux();
+      tmux.add(windowSnapshot());
+      const clock = new FakeClock();
+      const model = new FakeModel(async () => {
+        throw new Error("boom");
+      });
+      const cfg = config();
+      cfg.limits.circuit_failure_threshold = 1;
+      const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });
+
+      await runtime.handle(event("content_settled"));
+      await clock.advance(10);
+      expect(model.calls).toHaveLength(1);
+      expect(
+        (await runtime.explain({ windowId: "@1" })).limits.circuitOpenUntil,
+      ).toBeDefined();
+
+      const outcome = await runtime.handle(event("refresh_requested"));
+
+      expect(outcome).toEqual({
+        kind: "ignored",
+        windowId: "@1",
+        reason: "circuit_open",
+      });
+      expect(model.calls).toHaveLength(1);
+    });
+  });
+});
+
+// Target-behaviour tests for ADR 0001 (docs/adr/0001-stable-window-work-labels.md).
+// Not yet implemented: the runtime still replaces an accepted Task on scope
+// changes (see the "changed terminal content can replace the task" and
+// nested-Scope characterization tests above), and there is no `new` command
+// or model abstention outcome yet. These are placeholders to enable once
+// that work lands; each TODO(ADR-0001) note names the decision it encodes.
+describe("ADR-0001 target behaviour (not yet implemented)", () => {
+  test.todo(
+    "an accepted Task survives a Workspace/scope change with no automatic model call",
+    () => {
+      // TODO(ADR-0001): once a Task is accepted, automation may not replace
+      // it based on a Workspace-boundary crossing. Assert the Name Record's
+      // Task and Workspace are unchanged and that model.calls stays empty
+      // after the active pane's cwd/gitRoot moves to a different Workspace.
+    },
+  );
+
+  test.todo(
+    "an accepted Task survives a cwd change within the same Workspace with no automatic model call",
+    () => {
+      // TODO(ADR-0001): subdirectory changes within a Workspace never
+      // trigger automatic inference once a Task is accepted (ADR 0002).
+      // Assert the record is untouched and model.calls stays empty.
+    },
+  );
+
+  test.todo(
+    "an accepted Task survives the foreground process exiting with no automatic model call",
+    () => {
+      // TODO(ADR-0001): process exit is an explicit non-trigger once a Task
+      // is accepted. Assert a command_finished event after acceptance does
+      // not call the model even for a meaningful command.
+    },
+  );
+
+  test.todo("refresh keeps the old accepted Task when inference fails", () => {
+    // TODO(ADR-0001)/(D5): re-identification retains the old label when
+    // inference fails. Assert the Name Record's Task is unchanged and an
+    // error badge is shown, but the accepted Task is not discarded.
+  });
+
+  test.todo("refresh keeps the old accepted Task when the model abstains", () => {
+    // TODO(ADR-0002 D5): abstention is a normal outcome, not an error; it
+    // is not counted by the failure circuit but still consumes quota.
+    // Assert the old Task survives, no error badge appears, and quota is
+    // consumed.
+  });
+
+  test.todo("refresh replaces the accepted Task on a successful proposal", () => {
+    // TODO(ADR-0001): re-identification retains the old label "until a
+    // replacement is accepted". Assert a successful refresh result
+    // replaces the previously accepted Task.
+  });
+
+  test.todo(
+    "'new' discards the accepted Task, shows the Workspace-only name, and waits for changed evidence before inferring again",
+    () => {
+      // TODO(ADR-0001 New Work)/(D1): `new` discards the old Task and shows
+      // a Provisional (Workspace-only) name. Per D1, the evidence
+      // fingerprint at `new` time becomes a baseline; no automatic
+      // inference runs while the fingerprint still equals that baseline.
+      // Assert no model call happens on residual on-screen content and one
+      // does happen once the fingerprint changes.
+    },
+  );
+
+  test.todo("manual mode refuses 'new' and asks the user to restore automation first", () => {
+    // TODO(ADR-0001): "In manual mode it refuses the operation and asks
+    // the user to restore automation first." Assert `new` against a
+    // manual-mode window is rejected and the Manual Name is untouched.
+  });
+
+  test.todo(
+    "after Task acceptance, no further automatic model calls occur regardless of trigger",
+    () => {
+      // TODO(ADR-0001): "Automation may establish but never replace an
+      // accepted Task" / "After a Task is accepted, automatic model calls
+      // stop entirely" (ADR 0002). Assert window_changed, content_settled,
+      // and command_finished events after acceptance never call the model;
+      // only refresh_requested and `new` may.
+    },
+  );
 });
 
 describe("domain rules", () => {
