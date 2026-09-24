@@ -142,14 +142,28 @@ tmux-autoname secrets reload
 
 默认配置路径是 `~/.config/tmux-autoname/config.toml`。设置 `TMUX_AUTONAME_CONFIG` 可以改用其他文件。
 
+验证配置是否生效：
+
+```sh
+tmux-autoname explain
+```
+
+最后一行应显示 `Status: ready`。其他状态会说明缺少什么，例如配置或凭据问题。
+
 ## 使用
 
 加载插件时会为当前 tmux server 启动一个 daemon。默认每 3 秒检查一次，并等待可见内容稳定 4 秒，再判断是否需要调用 AI。
 
-使用 tmux 原有的 window rename 快捷键，通常是 `prefix` + <kbd>,</kbd>，即可手动接管名称。非空的手动名称会一直保留，直到运行：
+使用 tmux 原有的 window rename 快捷键，通常是 `prefix` + <kbd>,</kbd>，即可手动接管名称。非空的手动名称会一直保留，直到你恢复自动命名，可以运行：
 
 ```sh
 tmux-autoname auto
+```
+
+也可以用 tmux 自带的重命名命令，把名称清空：
+
+```sh
+tmux rename-window ""
 ```
 
 面向用户的命令如下：
@@ -174,6 +188,17 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
 该集成只发送命令 basename 和退出状态，不发送命令参数。
+
+### 可选的按键绑定
+
+默认不绑定任何按键。在插件加载前设置以下任一选项，即可为当前 window 绑定按键，并通过 tmux 状态栏消息反馈结果：
+
+```tmux
+set -g @tmux-autoname-key-refresh 'M-r'
+set -g @tmux-autoname-key-auto 'M-a'
+```
+
+`@tmux-autoname-key-refresh` 会为当前 window 运行 `tmux-autoname refresh`；`@tmux-autoname-key-auto` 会运行 `tmux-autoname auto`。两者都绑定在 `prefix` 按键表中，因此上面的例子需要按 `prefix` + <kbd>M-r</kbd> 或 `prefix` + <kbd>M-a</kbd> 触发。
 
 ## Window tab 徽标
 

@@ -30,6 +30,20 @@ if [ "$(tmux show-option -gqv @tmux-autoname-install-badge)" != off ]; then
   done
 fi
 
+# Optional, off-by-default key bindings: only bound when the user sets the
+# option explicitly, mirroring the opt-in pattern above. Each runs the
+# command for the current window and reports the result via display-message.
+key_refresh=$(tmux show-option -gqv @tmux-autoname-key-refresh)
+if [ -n "$key_refresh" ]; then
+  refresh_action="out=\$(\"\$TMUX_AUTONAME_BIN\" refresh --window #{window_id} 2>&1); tmux display-message \"tmux-autoname refresh: \$out\""
+  tmux bind-key "$key_refresh" run-shell -b "$refresh_action"
+fi
+key_auto=$(tmux show-option -gqv @tmux-autoname-key-auto)
+if [ -n "$key_auto" ]; then
+  auto_action="out=\$(\"\$TMUX_AUTONAME_BIN\" auto --window #{window_id} 2>&1); tmux display-message \"tmux-autoname auto: \${out:-restored}\""
+  tmux bind-key "$key_auto" run-shell -b "$auto_action"
+fi
+
 emit_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind window_changed --window #{window_id} >/dev/null 2>&1"
 rename_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind manual_name_changed --window #{window_id} --manual-name #{q:window_name} >/dev/null 2>&1"
 

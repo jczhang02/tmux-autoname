@@ -142,14 +142,28 @@ This restarts the daemon, clears cached credentials and authentication failures,
 
 The default configuration path is `~/.config/tmux-autoname/config.toml`. Set `TMUX_AUTONAME_CONFIG` to use another file.
 
+Verify the setup:
+
+```sh
+tmux-autoname explain
+```
+
+The last line should read `Status: ready`. Any other status describes what is missing, such as a configuration or credential problem.
+
 ## Use it
 
 Loading the plugin starts one daemon for the tmux server. The default monitor checks every 3 seconds and waits for 4 seconds of stable visible content before considering an AI request.
 
-Use tmux's normal rename binding, usually `prefix` + <kbd>,</kbd>, to take manual control of a window name. The plugin leaves a non-empty manual name unchanged until you run:
+Use tmux's normal rename binding, usually `prefix` + <kbd>,</kbd>, to take manual control of a window name. The plugin leaves a non-empty manual name unchanged until you restore automatic naming, either by running:
 
 ```sh
 tmux-autoname auto
+```
+
+or by clearing the name with tmux's own rename command:
+
+```sh
+tmux rename-window ""
 ```
 
 User-facing commands:
@@ -174,6 +188,17 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
 The integration sends the command basename and exit status. It does not send command arguments.
+
+### Optional key bindings
+
+No key is bound by default. Set either option before the plugin loads to bind a key for the current window, with feedback through tmux's status-line message:
+
+```tmux
+set -g @tmux-autoname-key-refresh 'M-r'
+set -g @tmux-autoname-key-auto 'M-a'
+```
+
+`@tmux-autoname-key-refresh` runs `tmux-autoname refresh` for the current window; `@tmux-autoname-key-auto` runs `tmux-autoname auto`. Both are bound in the `prefix` key table, so the example above is triggered as `prefix` + <kbd>M-r</kbd> or `prefix` + <kbd>M-a</kbd>.
 
 ## Window-tab badges
 
