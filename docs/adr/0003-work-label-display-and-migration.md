@@ -1,6 +1,6 @@
 # Work-label display and migration
 
-Status: Accepted. Implemented. Date: 2026-09-23.
+Status: Superseded by ADR 0004. Date: 2026-09-23.
 
 ## Context
 

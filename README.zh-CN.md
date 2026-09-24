@@ -4,69 +4,41 @@
 
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-tmux-autoname 根据当前工作内容命名 tmux window，不再只是重复显示前台进程名。
+tmux-autoname 把编码 Agent 自己设置的标题直接映射到 tmux 窗口名上。它不调用任何模型，不采集面板文字，也不需要 API key：Claude Code、codex、pi 都会通过 OSC 设置终端标题，tmux 已经把它记录为 `pane_title`，这个插件只是把它复制到窗口名里。
 
 ```text
-tmux-autoname/improve-process-detection
-partjobs/review-payment-flow
-website/fix-mobile-navigation
+tmux-autoname/Mirror agent titles instead of inferring them
+partjobs/查看当前工作情况
+website/fix mobile navigation
 ```
 
-默认格式是 `scope/task`。
+窗口名的格式是 `<workspace>/<title>`；如果还没有任何受支持的 Agent 报告过标题，则只显示 `<workspace>`。完整的设计动机见
+[docs/adr/0004-mirror-agent-titles.md](docs/adr/0004-mirror-agent-titles.md)。
 
-- Scope 是 Workspace：根据 tmux、cwd、Git 和路径信息生成候选项。模型只能选择本地候选项，不能编造路径。
-- Task 根据有限的终端内容生成，由 2 到 5 个小写英文单词组成，单词之间使用连字符。
-- Activity（当前 pane 的前台进程）不再出现在名称中。它仍会实时追踪，作为模型的参考证据，并可通过 `tmux-autoname explain` 查看，但不再显示在 window 标题里；Workspace 根目录以下的子目录（Area）也不再显示。
+## 为什么会有这次重写
 
-> **从旧版本升级：** 已接受的名称会被保留，但会一次性重新渲染，去掉 Activity 和 Area 后缀，改用新的 `scope/task` 格式。如果自定义显示模板中包含 `{activity}`，在你修改模板之前会改用默认格式渲染，并在 `tmux-autoname explain` 中报告诊断信息。
+早期版本用 LLM 从屏幕文字推断任务，这需要配置文件、API key、常驻 daemon 和 Bun 构建步骤，而且推断出的名字经常描述的是当前步骤而不是目标。既然 Agent 已经会给自己的工作命名，这个版本只是把它读出来。
 
-插件异步运行，不会覆盖手动名称，也不会弹出提示或 popup。window tab 上的小徽标会显示当前状态。
+## 依赖
 
-## 工作方式
+- tmux 3.3 及以上
+- POSIX `sh`（Linux、macOS 默认自带）
+- `git`，可选，用于生成 Workspace 名称
 
-- Scope 只跟踪 Workspace 根目录，不跟踪你所在的子目录。无论在 `partjobs` session 的根目录还是进入若干层子目录之后，名称都保持为 `partjobs/review-payment-flow`。
-- 在 Linux 上，进程解析会穿透 `systemd-run` 包装，因此 `codex` 和 `pi` 在证据采集和 `explain` 中仍显示自己的名字。
-- 屏幕监控直接读取终端内容，不要求安装 Codex、Claude Code、Pi 或编辑器扩展。
-- 有效信息发生变化并且屏幕稳定后，插件才会调用 AI。重复绘制的 shell prompt 不会产生新请求。
-- window 的 Task 一旦被接受，就是稳定的：即使 Workspace、目录或 activity 发生变化，自动化也不会再替换它。只有显式的 `tmux-autoname refresh`（在有新结果被接受前保留旧名称）或 `tmux-autoname new`（开始新工作，见下文）才能改变它。
-- 接受名称前，插件会校验 Scope ID、状态版本和证据指纹。过期或格式错误的结果会被丢弃。
-- 所有 pane 的本地进程和路径信息都会更新。终端文本只从已连接客户端当前可见的 pane 中采集。
+没有构建步骤，除 tmux 本身外没有运行时依赖。
 
-## 环境要求
-
-- tmux 3.2 或更高版本
-- Bun 1.3 或更高版本，用于安装和开发
-- OpenAI、Anthropic 或兼容 OpenAI API 的服务
-- 只有启用可选的 shell 生命周期集成时才需要 zsh
-- 使用相应凭据来源时，需要 `op`、`secret-tool` 或 macOS `security`
-
-## 使用 TPM 安装
-
-在 tmux 配置中加入：
+## 用 TPM 安装
 
 ```tmux
 set -g @plugin 'jczhang02/tmux-autoname'
 ```
 
-按 `prefix` + <kbd>I</kbd>。TPM 会克隆仓库，但仓库目前不提交编译后的二进制文件，因此每次安装或更新后需要构建一次：
-
-```sh
-plugin_dir="${TMUX_PLUGIN_MANAGER_PATH:-$HOME/.tmux/plugins}/tmux-autoname"
-cd "$plugin_dir"
-bun install --frozen-lockfile
-bun run build
-tmux source-file ~/.tmux.conf
-```
-
-如果 TPM 或 tmux 使用 XDG 目录，请改用对应路径。常见路径是 `~/.config/tmux/plugins/tmux-autoname` 和 `~/.config/tmux/tmux.conf`。
+按下 `prefix` + <kbd>I</kbd> 即可，不需要额外构建或配置。
 
 ## 手动安装
 
 ```sh
 git clone https://github.com/jczhang02/tmux-autoname ~/.tmux/plugins/tmux-autoname
-cd ~/.tmux/plugins/tmux-autoname
-bun install --frozen-lockfile
-bun run build
 ```
 
 在 `~/.tmux.conf` 中加载插件：
@@ -75,213 +47,112 @@ bun run build
 run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
 ```
 
-重新加载 tmux：
+然后重新加载 tmux：
 
 ```sh
 tmux source-file ~/.tmux.conf
 ```
 
-如果希望直接输入命令名，请把插件的 `bin` 目录加入 `PATH`：
+如果想直接用命令名调用（而不是通过加载脚本始终会设置的
+`$TMUX_AUTONAME_BIN`），把插件的 `bin` 目录加入 `PATH`：
 
 ```sh
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
-## 配置 AI
+## 支持的 Agent
 
-复制示例配置：
+| Agent | `pane_current_command` | 原始标题示例 | 归一化后的 Task |
+|---|---|---|---|
+| Claude Code | `claude` | `✳ Worktree review` | `Worktree review` |
+| codex | `codex` | `查看当前工作情况 \| bllc-reproduction` | `查看当前工作情况` |
+| pi | `pi` | `π - reviewer - myproj` | `reviewer` |
 
-```sh
-mkdir -p ~/.config/tmux-autoname
-cp config/config.example.toml ~/.config/tmux-autoname/config.toml
+占位标题——Claude Code 的 `Claude Code`、codex 设置线程标题之前的状态、或未命名的 pi 会话（`π - <cwd>`，没有会话名）——都算作没有标题，此时窗口只显示 Workspace。只考虑窗口的活动面板，以及（如果不同）刚刚发生标题变化的那个面板；当一个窗口内有多个 Agent 面板时，活动面板优先。一旦记录了 Task，它就会一直贴在这个窗口上——即使 Agent 退出也不会消失，只有窗口内某个 Agent 报告了新的、有意义的标题时才会替换。
+
+用 `@tmux-autoname-agents`（默认 `claude codex pi`）增删受支持的命令。
+
+## pi 会话命名
+
+pi 在会话被 `/name` 或某个扩展命名之前，标题一直是 `π - <cwd>`。
+`integrations/pi/session-title.ts` 补上了这一环：在第一轮 Agent 对话结束后，如果会话仍未命名，就向当前模型请求一个简短标题（基于用户的第一条消息），然后调用 `pi.setSessionName()`。它失败时静默处理，不会阻塞对话。
+
+安装方法：让 pi 指向这个文件，例如用 `-e
+~/.tmux/plugins/tmux-autoname/integrations/pi/session-title.ts`，或者把它加入 pi 配置的 extensions 列表。
+
+## Workspace
+
+Workspace 只计算一次，之后固定不变（直到执行 `clear`）：
+
+1. **会话容器规则。** 如果面板路径的某个祖先目录与 tmux 会话同名，就用会话名。
+2. **Git 仓库。** 否则用主仓库的目录名（`git rev-parse
+   --path-format=absolute --git-common-dir`）；worktree 会映射到其主仓库。
+3. **目录。** 否则用当前目录名；`$HOME` 显示为 `~`。
+
+在记录任何 Task 之前，Workspace 会在每次 sync 时重新计算，随面板当前路径变化。
+
+## 命令
+
+```
+tmux-autoname sync [-t pane_or_window]
+tmux-autoname set [-t window] <title...>
+tmux-autoname clear [-t window]
+tmux-autoname auto [-t window]
+tmux-autoname status [-t window]
+tmux-autoname help
 ```
 
-插件不预设 provider 或 model。下面是 OpenAI 兼容接口与 1Password 引用的最小配置：
+- `sync` 重新计算某个窗口的名字。钩子会自动调用它，通常不需要手动执行。
+- `set` 固定一个 Agent 标题无法覆盖的标题，例如
+  `tmux-autoname set Reviewing the payments PR`。
+- `clear` 清除固定标题、粘性 Agent 标题和固定的 Workspace，窗口回到只显示 Workspace 的状态。
+- `auto` 忘记手动 `tmux rename-window`，立即重新同步。
+- `status` 打印窗口的 Workspace、标题来源、粘性标题、固定标题、完整 label，以及是否被手动改名。
 
-```toml
-[ai]
-provider = "openai-compatible"
-model = "your-fast-model"
-base_url = "https://api.example.com/v1"
-confidence_threshold = 0.6
+用户手动改名（tmux 自带的 `prefix` + <kbd>,</kbd>，或 `rename-window`）会一直优先，直到运行 `tmux-autoname auto`，或把窗口名改成空字符串（`tmux rename-window ""`）以恢复自动命名。
 
-[ai.credential]
-source = "onepassword"
-ref = "op://Private/OpenAI/api-key"
-```
+## 选项
 
-也可以直接把密钥写进同一个文件：
-
-```toml
-[ai]
-provider = "openai-compatible"
-model = "your-fast-model"
-base_url = "https://api.example.com/v1"
-api_key = "your-api-key"
-```
-
-`api_key` 和 `[ai.credential]` 不能同时使用。明文密钥配置最省事，但密钥会保存在磁盘上。请限制配置文件的访问权限：
-
-```sh
-chmod 600 ~/.config/tmux-autoname/config.toml
-```
-
-凭据引用支持以下来源：
-
-| 来源 | 配置 | 行为 |
+| 选项 | 默认值 | 含义 |
 |---|---|---|
-| 1Password | `source = "onepassword"` 和 `op://` 引用 | 使用 1Password CLI 及桌面应用集成 |
-| Linux keyring | `source = "keyring"`、`service` 和 `account` | 通过 `secret-tool` 读取当前登录会话的 Secret Service |
-| macOS Keychain | `source = "keychain"`、`service` 和 `account` | 通过 `security` 读取当前用户已解锁的 Keychain |
-| 环境变量 | `source = "env"` 和 `name` | 从 tmux server 环境中读取指定变量 |
+| `@tmux-autoname-agents` | `claude codex pi` | 贡献标题的 `pane_current_command` 值，空格分隔 |
+| `@tmux-autoname-max-width` | `32` | 窗口名被截断为 `…` 之前的显示宽度 |
+| `@tmux-autoname-key-set` | 未设置 | 绑定在 `prefix` 键表中的按键，弹出以当前 label 预填的输入框来固定标题 |
+| `@tmux-autoname-key-clear` | 未设置 | 清除当前窗口的按键 |
+| `@tmux-autoname-key-pick` | 未设置 | 打开显示完整 label 的 `choose-tree` 的按键 |
 
-daemon 会在第一次模型请求时读取凭据，并缓存在内存里。每次重命名都不会再次访问密码管理器。修改配置或密钥后运行：
-
-```sh
-tmux-autoname secrets reload
-```
-
-该命令会重启 daemon，清除已缓存的凭据和认证失败状态，同时保留每小时请求计数。服务端返回 401 或 403 时，也会清除缓存的凭据。
-
-默认配置路径是 `~/.config/tmux-autoname/config.toml`。设置 `TMUX_AUTONAME_CONFIG` 可以改用其他文件。
-
-验证配置是否生效：
-
-```sh
-tmux-autoname explain
-```
-
-最后一行应显示 `Status: ready`。其他状态会说明缺少什么，例如配置或凭据问题。
-
-## 使用
-
-加载插件时会为当前 tmux server 启动一个 daemon。默认每 3 秒检查一次，并等待可见内容稳定 4 秒，再判断是否需要调用 AI。
-
-使用 tmux 原有的 window rename 快捷键，通常是 `prefix` + <kbd>,</kbd>，即可手动接管名称。非空的手动名称会一直保留，直到你恢复自动命名，可以运行：
-
-```sh
-tmux-autoname auto
-```
-
-也可以用 tmux 自带的重命名命令，把名称清空：
-
-```sh
-tmux rename-window ""
-```
-
-面向用户的命令如下：
-
-| 命令 | 作用 |
-|---|---|
-| `tmux-autoname refresh` | 重新识别：立即请求推理，等待 applied、failed 或 blocked 的最终结果并打印。在新结果被接受前保留旧名称，包括推理失败或放弃时 |
-| `tmux-autoname new` | 开始新工作：丢弃 window 的 Task，显示仅含 Workspace 的名称，并等待变化的证据后才再次推理。手动模式下会拒绝执行 |
-| `tmux-autoname explain` | 显示当前名称记录、模式、徽标、错误、已接受提案的置信度、请求计数和熔断状态，不发起推理 |
-| `tmux-autoname auto` | 清除手动名称，让 window 恢复自动命名 |
-| `tmux-autoname secrets reload` | 重启 daemon，重新读取配置和凭据 |
-
-`refresh`、`new`、`auto` 和 `explain` 支持 `--window @ID` 或 `--pane %ID`。在 tmux 内不指定目标时，它们使用当前 pane。`refresh` 和 `explain` 还支持 `--json`。
-
-`refresh` 会跳过 debounce 和最小请求间隔，但仍受每小时配额与熔断器限制。`new` 不会重置配额，且只影响目标 window。
-
-`refresh` 和 `new` 都不会解锁 Manual Name；只有 `tmux-autoname auto` 或 `tmux rename-window ""` 才能做到。
-
-### 可选的 zsh 生命周期事件
-
-屏幕监控不依赖 shell 集成。如果希望把命令开始和结束作为额外的调度信号，请在 `~/.zshrc` 中加入：
-
-```zsh
-source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
-```
-
-该集成只发送命令 basename 和退出状态，不发送命令参数。
-
-### 可选的按键绑定
-
-默认不绑定任何按键。在插件加载前设置以下任一选项，即可为当前 window 绑定按键，并通过 tmux 状态栏消息反馈结果：
+在插件加载之前设置：
 
 ```tmux
-set -g @tmux-autoname-key-refresh 'M-r'
-set -g @tmux-autoname-key-auto 'M-a'
-set -g @tmux-autoname-key-new 'M-n'
+set -g @tmux-autoname-max-width 40
+set -g @tmux-autoname-key-set 'M-r'
+set -g @tmux-autoname-key-clear 'M-c'
+set -g @tmux-autoname-key-pick 'M-p'
 ```
 
-`@tmux-autoname-key-refresh` 会为当前 window 运行 `tmux-autoname refresh`；`@tmux-autoname-key-auto` 会运行 `tmux-autoname auto`；`@tmux-autoname-key-new` 会运行 `tmux-autoname new`。三者都绑定在 `prefix` 按键表中，因此上面的例子需要按 `prefix` + <kbd>M-r</kbd>、`prefix` + <kbd>M-a</kbd> 或 `prefix` + <kbd>M-n</kbd> 触发。
+完整、未截断的 label 始终可以通过 `#{@tmux-autoname-label}` 获取，可用于你自己的 `window-status-format`。
 
-## Window tab 徽标
+## 从 0.5 及更早版本升级
 
-插件会把徽标追加到现有的 `window-status-format`，不会替换主题。
+0.6 完全移除了 TypeScript/Bun 运行时、推断 daemon、配置文件和窗口标签徽章——没有需要构建或配置的东西。加载新的 `tmux-autoname.tmux` 会自动迁移旧安装：停止旧 daemon、覆盖旧的带索引钩子、从你的
+`window-status-format`/`window-status-current-format` 中移除它曾追加的徽章片段，并清除它的过时全局选项。你自己手动改名的窗口（Manual Name）不受影响。详见
+[CHANGELOG.md](CHANGELOG.md)。
 
-| 状态 | 普通字符 | Nerd Font |
-|---|---:|---:|
-| 正在生成 | `…` | `󰚩` |
-| 失败 | `!` | `` |
-| 无法读取密钥 | `K!` | `` |
-| 手动命名 | `M` | `` |
-| 正常 | 空 | 空 |
+## 局限
 
-在加载插件前启用 Nerd Font 徽标：
-
-```tmux
-set -g @tmux-autoname-badge-style 'nerd'
-```
-
-如果要自己决定徽标在 status format 中的位置：
-
-```tmux
-set -g @tmux-autoname-install-badge 'off'
-```
-
-window 级别的值是 `#{@tmux-autoname-badge}`。
-
-## tmux 与进程兼容性
-
-加载脚本会关闭 tmux 内置的 `automatic-rename`，安装带索引的 hook，并追加徽标。它不会覆盖无关的 hook 或 status format。
-
-每个 daemon 都会报告 build identity。加载新版本时，旧 daemon 会被替换。
-
-在 Linux 上，如果 tmux 报告的进程是 `systemd-run`，解析器会检查前台进程组，并读取显式 `--` 分隔符之后的可执行文件。通过 `systemd-run --wait --pty -- …` 启动的命令仍会显示为 `codex` 或 `pi`。解析失败时，Activity 会保留为 `systemd-run`。procfs 中的原始命令行不会保存，也不会发送给模型。
-
-Agent 完成提醒与本插件无关。tmux-autoname 不发送或读取 OSC 通知，也不会因为 Agent 结束运行而修改名称。
-
-## 隐私、成本和资源占用
-
-> [!IMPORTANT]
-> 模型请求包含当前 pane 的终端尾部内容，以及有限的 tmux、cwd、进程、title、Git 和路径候选、旧名称、辅助 pane 信息。请使用你愿意接收这些数据的 provider 和 endpoint。
-
-终端内容最多 50 行、8 KiB。常见密钥格式会在本地尽力脱敏。内容只保存在内存中，不会写入 tmux 状态或日志。插件不会发送完整 scrollback、环境变量列表、shell history 或 procfs 原始命令行。终端画面中已经显示的命令参数可能被包含。
-
-只有在稳定的有效信息发生变化后，插件才会调用 AI。默认限制为每个 window 每小时最多 6 次、每个 tmux server 每小时最多 30 次，模型输出上限为 512 tokens。常见输入实测约为 250 到 500 tokens；接近 8 KiB 的输入约为 2,500 到 5,000 tokens。实际计数取决于 provider 的 tokenizer。
-
-本地测试中，一个可见 pane 稳态运行 30 秒，平均 CPU 占用为 0.7%，内存与文件描述符数量保持稳定。不同硬件和负载会有差异。需要时可以降低配额：
-
-```toml
-[limits]
-minimum_call_interval_ms = 120000
-max_calls_per_window_hour = 3
-max_calls_per_server_hour = 15
-```
+- 命名质量现在完全取决于 Agent 自己标题的质量；没有受支持 Agent 的窗口只显示 Workspace。
+- Claude Code 会保留第一个话题的标题，在长会话中可能跟不上当前焦点；用
+  `tmux-autoname set` 或 Agent 自己的改名命令可以解决。
+- 开箱只支持 `claude`、`codex`、`pi`：如果其他工具设置的标题格式不需要特殊归一化，可以直接加入
+  `@tmux-autoname-agents`；如果需要，则要在 `bin/tmux-autoname` 的
+  `normalize_title()` 里做一点小改动。
 
 ## 开发与验证
 
 ```sh
-bun install --frozen-lockfile
-bun run check
+shellcheck tmux-autoname.tmux bin/tmux-autoname test/run.sh
+sh test/run.sh
 ```
 
-`bun run check` 包含类型检查、单元测试、模拟测试、使用本地假 provider 的隔离 tmux E2E 测试和 shell 校验。
-
-可选的发布前 soak 测试会真实运行 30 分钟：
-
-```sh
-bun run test:soak
-```
-
-离线命名质量评测会用 `test/eval/fixtures/` 下的真实证据样例给已配置的模型打分。它和 soak 测试一样是可选的，不会包含在 `bun run test` 中（后者只检查样例能否解析、prompt 构造器能否处理它们）：
-
-```sh
-TMUX_AUTONAME_RUN_EVAL=1 bun run eval
-```
-
-它会报告有效性、与每个样例预期 Task 的关键词匹配度、弃权正确性，以及在近似重复证据下的稳定性。
-
-模拟测试会推进 24 小时的逻辑时间，不需要等待 24 小时。行为规范见 [SPEC.md](SPEC.md)，中文版本见 [SPEC.zh-CN.md](SPEC.zh-CN.md)。
+`test/run.sh` 会启动真实的、隔离的 tmux server（`tmux -L
+tmux-autoname-test-*`），并用会发出真实 OSC 标题序列的伪造 `claude`/`codex`/`pi` 进程驱动它，因此测试的是真实的钩子和格式正则，而不是它们的重新实现。
