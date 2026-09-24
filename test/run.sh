@@ -91,6 +91,51 @@ t() {
   tmux -L "$SOCK" "$@"
 }
 
+# --- Real attached-client driving ---------------------------------------
+#
+# command-prompt and choose-tree only run for an attached client. We attach
+# one for real by running `tmux -L $SOCK attach` as the sole pane of a
+# second, outer tmux server and driving it with send-keys; capture-pane on
+# that outer pane shows exactly what a real terminal attached to the inner
+# session would render, prompts and popups included.
+attach_client() {
+  # $1 = target window in the inner session (default: w)
+  target=${1:-w}
+  TESTN=$((TESTN + 1))
+  OUTER_SOCK="tmux-autoname-test-outer-$$-$TESTN"
+  SERVERS="$SERVERS $OUTER_SOCK"
+  tmux -L "$OUTER_SOCK" -f /dev/null new-session -d -x 200 -y 50 \
+    "tmux -L $SOCK attach -t $target"
+  sleep 0.5 # let the attach settle before the first send-keys
+}
+
+detach_client() {
+  tmux -L "$OUTER_SOCK" kill-server >/dev/null 2>&1 || true
+}
+
+client_send() {
+  tmux -L "$OUTER_SOCK" send-keys "$@"
+}
+
+client_capture() {
+  tmux -L "$OUTER_SOCK" capture-pane -p 2>/dev/null
+}
+
+client_wait_for() {
+  # $1 = substring that must appear somewhere in the outer client's screen
+  needle=$1
+  i=0
+  while [ "$i" -lt 60 ]; do
+    got=$(client_capture) || got=""
+    case "$got" in
+      *"$needle"*) return 0 ;;
+    esac
+    i=$((i + 1))
+    sleep 0.05
+  done
+  return 1
+}
+
 start_agent() {
   # $1 = agent name (claude|codex|pi), $2 = target pane (default: w)
   agent=$1
@@ -186,6 +231,24 @@ test_codex_suffix() {
   stop_server
 }
 
+test_codex_spinner_glyph() {
+  start_server
+  load_plugin
+  start_agent codex
+  assert_eq "codex placeholder (no separator) ignored" '#{window_name}' '~'
+  set_title '⠸ ⠸ | dotfiles'
+  assert_eq "codex glyph-only candidate before a thread title is a placeholder" '#{window_name}' '~'
+  set_title '⠸ Summarize tmux configuration | dotfiles'
+  assert_eq "codex spinner glyph stripped from title" '#{window_name}' '~/Summarize tmux configuration'
+  set_title 'Summarize tmux configuration | dotfiles'
+  assert_eq "codex title without spinner is not stale" '#{window_name}' '~/Summarize tmux configuration'
+  set_title '⠹ Summarize tmux configuration | dotfiles'
+  assert_eq "codex spinner reappearing keeps the same title" '#{window_name}' '~/Summarize tmux configuration'
+  set_title '⠴ Different task now | dotfiles'
+  assert_eq "codex new title while spinner active replaces old" '#{window_name}' '~/Different task now'
+  stop_server
+}
+
 test_pi_named_and_unnamed() {
   start_server
   load_plugin
@@ -264,16 +327,43 @@ test_git_workspace() {
 
 test_session_container_workspace() {
   container_dir=$(mktemp -d)
-  proj_dir="$container_dir/myproj/sub"
-  mkdir -p "$proj_dir"
+  proj_dir="$container_dir/myproj"
+  mkdir -p "$proj_dir/sub"
   TESTN=$((TESTN + 1))
   SOCK="tmux-autoname-test-$$-$TESTN"
   SERVERS="$SERVERS $SOCK"
+  # session_path's basename equals the session name, so any pane at or
+  # under it uses the session name as Workspace.
   tmux -L "$SOCK" -f /dev/null new-session -d -s myproj -x 200 -y 50 -c "$proj_dir"
   load_plugin
-  assert_eq "session-container ancestor picked as workspace" '#{window_name}' 'myproj' 'myproj'
+  assert_eq "session path basename matches session name" '#{window_name}' 'myproj' 'myproj'
+  # "myproj:" (not bare "myproj"), since window 0 is itself now named
+  # "myproj" - an unqualified target would be ambiguous between the session
+  # and that window.
+  t new-window -t myproj: -c "$proj_dir/sub"
+  assert_eq "pane under session_path also uses session name" '#{window_name}' 'myproj' 'myproj:1'
   stop_server
   rm -rf "$container_dir"
+}
+
+test_session_container_ancestor_is_not_enough() {
+  outer_dir=$(mktemp -d)
+  nested_dir="$outer_dir/dev/partjobs"
+  mkdir -p "$nested_dir"
+  TESTN=$((TESTN + 1))
+  SOCK="tmux-autoname-test-$$-$TESTN"
+  SERVERS="$SERVERS $SOCK"
+  # Session "dev" started at $HOME, not under outer_dir/dev: session_path's
+  # basename is not "dev" (or if it is, it isn't nested_dir's ancestor), so
+  # a pane merely nested under an unrelated directory also named "dev" must
+  # not be mistaken for the session's own container.
+  tmux -L "$SOCK" -f /dev/null new-session -d -s dev -x 200 -y 50 -c "$HOME"
+  load_plugin
+  t new-window -t dev -c "$nested_dir"
+  assert_eq "unrelated ancestor sharing the session name is not the workspace" \
+    '#{window_name}' 'partjobs' 'dev:1'
+  stop_server
+  rm -rf "$outer_dir"
 }
 
 test_truncation_cjk() {
@@ -403,10 +493,235 @@ test_migration() {
   stop_server
 }
 
+test_loader_syncs_all_windows() {
+  start_server
+  t new-window -t w -c "$HOME"
+  t new-window -t w -c "$HOME"
+  load_plugin
+  assert_eq "window 0 named on load" '#{window_name}' '~' 'w:0'
+  assert_eq "window 1 named on load" '#{window_name}' '~' 'w:1'
+  assert_eq "window 2 named on load" '#{window_name}' '~' 'w:2'
+  stop_server
+}
+
+test_session_created_hook_registered() {
+  start_server
+  load_plugin
+  if t show-hooks -g 2>/dev/null | grep -q 'session-created\[120\]'; then
+    pass "session-created[120] hook registered"
+  else
+    fail "session-created[120] hook registered"
+  fi
+  t new-session -d -s second -c "$HOME"
+  assert_eq "session-created hook names the new session's first window" \
+    '#{window_name}' '~' 'second:0'
+  t kill-session -t second
+  stop_server
+}
+
+status_field() {
+  # $1 = window target, $2 = field name (as printed by `status`)
+  tmux -L "$SOCK" run-shell "'$BIN' status -t $1" 2>/dev/null |
+    sed -n "s/^$2: //p"
+}
+
+test_migration_window_state() {
+  start_server
+
+  manual_state=$(printf '{"mode":"manual","lastAppliedName":"old","manualName":"pinned"}' | base64 | tr -d '\n')
+  automatic_state=$(printf '{"mode":"automatic","lastAppliedName":"old"}' | base64 | tr -d '\n')
+  garbage_state='not-valid-base64!!!'
+
+  t new-window -t w -c "$HOME" # win_manual (index 1)
+  t new-window -t w -c "$HOME" # win_automatic (index 2)
+  t new-window -t w -c "$HOME" # win_garbage (index 3)
+  t new-window -t w -c "$HOME" # win_fresh_manual (index 4)
+  t new-window -t w -c "$HOME" # win_fresh_auto (index 5)
+
+  t set-option -t w:1 -w @tmux-autoname-state "$manual_state"
+  t set-option -t w:1 -w @tmux-autoname-badge 'old-badge'
+  t set-option -t w:1 -w automatic-rename off
+  t rename-window -t w:1 mymanualname
+
+  t set-option -t w:2 -w @tmux-autoname-state "$automatic_state"
+  t set-option -t w:2 -w @tmux-autoname-badge 'old-badge'
+  t set-option -t w:2 -w automatic-rename off
+
+  t set-option -t w:3 -w @tmux-autoname-state "$garbage_state"
+
+  t set-option -t w:4 -w automatic-rename off
+  t rename-window -t w:4 usernamed
+
+  load_plugin
+
+  assert_eq "old manual state: rename is not overwritten" '#{window_name}' 'mymanualname' 'w:1'
+  if [ "$(status_field w:1 manual)" = "yes" ]; then
+    pass "old manual state: status reports manual"
+  else
+    fail "old manual state: status reports manual"
+  fi
+  if [ -z "$(t show-option -t w:1 -wqv @tmux-autoname-state 2>/dev/null)" ]; then
+    pass "old manual state: @tmux-autoname-state unset"
+  else
+    fail "old manual state: @tmux-autoname-state unset"
+  fi
+  if [ -z "$(t show-option -t w:1 -wqv @tmux-autoname-badge 2>/dev/null)" ]; then
+    pass "old manual state: @tmux-autoname-badge unset"
+  else
+    fail "old manual state: @tmux-autoname-badge unset"
+  fi
+
+  assert_eq "old automatic state: new plugin takes over" '#{window_name}' '~' 'w:2'
+  if [ "$(status_field w:2 manual)" = "no" ]; then
+    pass "old automatic state: status reports automatic"
+  else
+    fail "old automatic state: status reports automatic"
+  fi
+  if [ -z "$(t show-option -t w:2 -wqv @tmux-autoname-state 2>/dev/null)" ]; then
+    pass "old automatic state: @tmux-autoname-state unset"
+  else
+    fail "old automatic state: @tmux-autoname-state unset"
+  fi
+
+  if [ "$(status_field w:3 manual)" = "yes" ]; then
+    pass "undecodable state is treated as manual"
+  else
+    fail "undecodable state is treated as manual"
+  fi
+  if [ -z "$(t show-option -t w:3 -wqv @tmux-autoname-state 2>/dev/null)" ]; then
+    pass "undecodable state: @tmux-autoname-state unset"
+  else
+    fail "undecodable state: @tmux-autoname-state unset"
+  fi
+
+  assert_eq "fresh install: automatic-rename off with no old state is manual" \
+    '#{window_name}' 'usernamed' 'w:4'
+  if [ "$(status_field w:4 manual)" = "yes" ]; then
+    pass "fresh install manual heuristic: status reports manual"
+  else
+    fail "fresh install manual heuristic: status reports manual"
+  fi
+
+  assert_eq "fresh window with automatic-rename on stays automatic" '#{window_name}' '~' 'w:5'
+
+  stop_server
+}
+
+test_loader_ignores_inherited_bin_env_var() {
+  start_server
+  stale_bin="$FAKE_DIR/stale-tmux-autoname"
+  cat >"$stale_bin" <<'SCRIPT'
+#!/bin/sh
+exit 1
+SCRIPT
+  chmod +x "$stale_bin"
+  # A shell that inherited TMUX_AUTONAME_BIN from an old install (which used
+  # to `export` it) must not pin the server to that stale binary: only a
+  # tmux option set before the plugin loads is honoured.
+  tmux -L "$SOCK" run-shell "TMUX_AUTONAME_BIN='$stale_bin' '$PLUGIN'"
+  start_agent claude
+  set_title '✳ Still Works'
+  assert_eq "inherited TMUX_AUTONAME_BIN is not used to resolve the binary" \
+    '#{window_name}' '~/Still Works'
+  stop_server
+}
+
+test_loader_honours_bin_option_set_before_load() {
+  start_server
+  wrapper="$FAKE_DIR/custom-tmux-autoname"
+  cat >"$wrapper" <<SCRIPT
+#!/bin/sh
+exec '$BIN' "\$@"
+SCRIPT
+  chmod +x "$wrapper"
+  t set-option -g @tmux-autoname-bin "$wrapper"
+  load_plugin
+  win=$(t display-message -p -t w '#{window_id}')
+  tmux -L "$SOCK" run-shell "'$wrapper' set -t $win Via Wrapper" >/dev/null 2>&1
+  assert_eq "a @tmux-autoname-bin set before load is honoured" '#{window_name}' '~/Via Wrapper'
+  if [ "$(t show-option -gqv @tmux-autoname-bin 2>/dev/null)" = "$wrapper" ]; then
+    pass "the loader does not overwrite a user-set @tmux-autoname-bin"
+  else
+    fail "the loader does not overwrite a user-set @tmux-autoname-bin"
+  fi
+  stop_server
+}
+
+test_key_set_binding_prefill_and_apostrophe() {
+  start_server
+  t set-option -g @tmux-autoname-key-set 'M-r'
+  load_plugin
+  win=$(t display-message -p -t w '#{window_id}')
+  tmux -L "$SOCK" run-shell "'$BIN' set -t $win Old Pin" >/dev/null 2>&1
+
+  attach_client w
+  client_send C-b M-r
+  if client_wait_for 'tmux-autoname set: Old Pin'; then
+    pass "key-set binding prefills the current pin"
+  else
+    fail "key-set binding prefills the current pin (got: $(client_capture | tail -1))"
+  fi
+  client_send C-u
+  client_send -l "JC's Task"
+  client_send Enter
+  detach_client
+  assert_eq "apostrophe in a pinned title round-trips" '#{window_name}' "~/JC's Task"
+  stop_server
+}
+
+test_key_set_binding_prefills_sticky_title_when_no_pin() {
+  start_server
+  t set-option -g @tmux-autoname-key-set 'M-r'
+  load_plugin
+  start_agent claude
+  set_title '✳ Some Task'
+  assert_eq "sticky title set from agent" '#{window_name}' '~/Some Task'
+
+  attach_client w
+  client_send C-b M-r
+  if client_wait_for 'tmux-autoname set: Some Task'; then
+    pass "key-set binding prefills the sticky title when there is no pin"
+  else
+    fail "key-set binding prefills the sticky title when there is no pin (got: $(client_capture | tail -1))"
+  fi
+  client_send Escape
+  detach_client
+  stop_server
+}
+
+test_picker_format_no_duplicate_index() {
+  start_server
+  t set-option -g @tmux-autoname-key-pick 'M-p'
+  load_plugin
+  win=$(t display-message -p -t w '#{window_id}')
+  tmux -L "$SOCK" run-shell "'$BIN' set -t $win Pinned Title" >/dev/null 2>&1
+
+  attach_client w
+  client_send C-b M-p
+  if client_wait_for '~/Pinned Title'; then
+    pass "picker shows the full label"
+  else
+    fail "picker shows the full label (got: $(client_capture))"
+  fi
+  screen=$(client_capture)
+  case "$screen" in
+    *"0: 0:"* | *"0:0:"*)
+      fail "picker window row has no duplicate index (got: $screen)"
+      ;;
+    *)
+      pass "picker window row has no duplicate index"
+      ;;
+  esac
+  client_send Escape
+  detach_client
+  stop_server
+}
+
 run_all() {
   test_claude_glyph_and_spinner
   test_claude_new_title_replaces
   test_codex_suffix
+  test_codex_spinner_glyph
   test_pi_named_and_unnamed
   test_sticky_after_exit
   test_active_pane_wins
@@ -416,12 +731,21 @@ run_all() {
     test_git_workspace
   fi
   test_session_container_workspace
+  test_session_container_ancestor_is_not_enough
   test_truncation_cjk
   test_set_clear_auto
   test_manual_rename_respected
   test_auto_restores_after_manual
   test_empty_rename_restores_auto
+  test_loader_syncs_all_windows
+  test_session_created_hook_registered
+  test_key_set_binding_prefill_and_apostrophe
+  test_key_set_binding_prefills_sticky_title_when_no_pin
+  test_picker_format_no_duplicate_index
   test_migration
+  test_migration_window_state
+  test_loader_ignores_inherited_bin_env_var
+  test_loader_honours_bin_option_set_before_load
 }
 
 run_all
