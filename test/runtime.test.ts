@@ -6,6 +6,7 @@ import {
   deterministicScope,
   evidenceFingerprint,
   isValidTask,
+  normalizeTask,
   renderName,
   type NameRequest,
 } from "../src/domain";
@@ -604,5 +605,26 @@ describe("domain rules", () => {
     expect(isValidTask("sorry-cannot-help")).toBe(false);
     expect(badgeText("generating", "plain")).toBe("…");
     expect(badgeText("generating", "nerd")).toBe("󰚩");
+  });
+
+  test("repairs deterministic formatting slips before validation (D7)", () => {
+    expect(normalizeTask("  Rewrite   Naming Plugin  ")).toBe("rewrite-naming-plugin");
+    expect(normalizeTask("Fix the bug.")).toBe("fix-the-bug");
+    expect(normalizeTask("Add \"quotes\" support!")).toBe("add-quotes-support");
+    expect(normalizeTask("collapse--repeated---hyphens")).toBe("collapse-repeated-hyphens");
+    expect(normalizeTask("-leading-and-trailing-")).toBe("leading-and-trailing");
+    expect(isValidTask(normalizeTask("  Rewrite   Naming Plugin  "))).toBe(true);
+  });
+
+  test("detects refusal-shaped slugs anywhere in the slug, not just as a prefix", () => {
+    expect(isValidTask("i-cannot-help-with-this")).toBe(false);
+    expect(isValidTask("please-forgive-me-sorry-about-that")).toBe(false);
+    expect(isValidTask("as-an-ai-i-cannot-comply")).toBe(false);
+    expect(isValidTask("rewrite-the-naming-plugin-cannot-fail")).toBe(false);
+    expect(isValidTask("i-am-an-ai-language-model")).toBe(false);
+    // A legitimate task must still pass even though it shares a substring
+    // with a refusal keyword (e.g. "cant" inside "recant" is not a match).
+    expect(isValidTask("recant-the-old-config")).toBe(true);
+    expect(isValidTask("rewrite-naming-plugin")).toBe(true);
   });
 });

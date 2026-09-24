@@ -411,15 +411,54 @@ export const renderName = (
     .trim();
 };
 
+// Deterministic repair (D7): lowercase, strip stray punctuation, and collapse
+// whitespace/hyphen runs before validation, so minor model formatting slips
+// don't need a fresh model call to fix.
 export const normalizeTask = (task: string): string =>
-  task.replace(/^ +| +$/g, "").replace(/ +/g, "-");
+  task
+    .trim()
+    .toLowerCase()
+    .replace(/['"“”‘’.,!?;:()[\]{}]/gu, "")
+    .replace(/[\s_]+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+
+const refusalKeywords = [
+  "sorry",
+  "apologize",
+  "apologies",
+  "cannot",
+  "cant",
+  "unable",
+  "refuse",
+  "as-an-ai",
+  "i-am-an-ai",
+  "im-an-ai",
+  "language-model",
+  "large-language-model",
+  "ai-assistant",
+  "ai-model",
+  "chatbot",
+  "here-is",
+  "the-task",
+  "task-is",
+  "no-task",
+];
+
+// Anchor each keyword between hyphens so multi-word keywords (e.g.
+// "as-an-ai") and single-word ones alike only match whole slug tokens,
+// wherever they occur in the slug rather than just as a prefix.
+const isRefusalShaped = (task: string): boolean => {
+  const padded = `-${task}-`;
+  return refusalKeywords.some((keyword) => padded.includes(`-${keyword}-`));
+};
 
 export const isValidTask = (task: string): boolean => {
   if (/[\u0000-\u001f\u007f\u001b]/u.test(task)) return false;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+){1,4}$/.test(task)) {
     return false;
   }
-  return !/^(?:i-cannot|i-cant|sorry|here-is|the-task|unable-to)(?:-|$)/.test(task);
+  return !isRefusalShaped(task);
 };
 
 export const acceptProposal = (
