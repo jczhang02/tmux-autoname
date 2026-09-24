@@ -190,6 +190,12 @@ do_sync() {
   title=$pin
   [ -n "$title" ] || title=$(wopt "$win" @tmux-autoname-title)
 
+  # Kept up to date so the key-set binding can prefill from a single plain
+  # format (#{@tmux-autoname-prefill}): command-prompt's -I splits on comma
+  # before expanding formats, so a "#{?@tmux-autoname-pin,...,...}"
+  # conditional there is parsed as three separate inputs instead of one.
+  wset "$win" @tmux-autoname-prefill "$title"
+
   cwd=$(pane_field "$active_pane" pane_current_path)
   session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""
   session_path=$(tmux display-message -p -t "$win" '#{session_path}' 2>/dev/null) || session_path=""

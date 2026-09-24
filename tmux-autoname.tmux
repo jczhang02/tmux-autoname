@@ -117,9 +117,23 @@ tmux set-hook -g 'after-rename-window[120]' \
 # pattern for badges in the old version.
 key_set=$(tmux show-option -gqv @tmux-autoname-key-set)
 if [ -n "$key_set" ]; then
+  # Prefill with the current pin, else the sticky agent title - never the
+  # full "workspace/title" label, or accepting it unchanged would pin
+  # "workspace/workspace/title". do_sync keeps @tmux-autoname-prefill equal
+  # to exactly that (pin, falling back to the sticky title). It has to be a
+  # single plain format: command-prompt's -I splits its argument on commas
+  # before expanding formats, so a "#{?@tmux-autoname-pin,...,...}"
+  # conditional here would be parsed as three separate prompt inputs
+  # instead of one, and always render blank.
+  #
+  # Setting @tmux-autoname-pin directly (rather than shelling out to
+  # `tmux-autoname set "$title"`) avoids re-quoting the submitted text as a
+  # shell argument at all, so apostrophes and other shell-special
+  # characters round-trip: "%%%" inside a double-quoted command-prompt
+  # template substitutes the raw response verbatim.
+  set_cmd="set-option -w @tmux-autoname-pin \"%%%\" ; run-shell -b \"'${bin_q}' sync -t #{window_id}\""
   tmux bind-key "$key_set" \
-    command-prompt -I "#{@tmux-autoname-label}" -p "tmux-autoname set:" \
-    "run-shell -b \"'${bin_q}' set -t #{window_id} '%%'\""
+    command-prompt -I '#{@tmux-autoname-prefill}' -p 'tmux-autoname set:' "$set_cmd"
 fi
 key_clear=$(tmux show-option -gqv @tmux-autoname-key-clear)
 if [ -n "$key_clear" ]; then
