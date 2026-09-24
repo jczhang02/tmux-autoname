@@ -92,18 +92,19 @@ normalize_title() {
 compute_workspace() {
   cwd=$1
   session=$2
+  session_path=$3
   [ -n "$cwd" ] || { printf ''; return 0; }
 
-  if [ -n "$session" ]; then
-    p=$cwd
-    while [ -n "$p" ] && [ "$p" != "/" ]; do
-      b=$(basename -- "$p")
-      if [ "$b" = "$session" ]; then
-        printf '%s' "$session"
-        return 0
-      fi
-      p=$(dirname -- "$p")
-    done
+  if [ -n "$session" ] && [ -n "$session_path" ]; then
+    sp_base=$(basename -- "$session_path")
+    if [ "$sp_base" = "$session" ]; then
+      case "$cwd" in
+        "$session_path" | "$session_path"/*)
+          printf '%s' "$session"
+          return 0
+          ;;
+      esac
+    fi
   fi
 
   if command -v git >/dev/null 2>&1; then
@@ -173,12 +174,13 @@ do_sync() {
 
   cwd=$(pane_field "$active_pane" pane_current_path)
   session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""
+  session_path=$(tmux display-message -p -t "$win" '#{session_path}' 2>/dev/null) || session_path=""
 
   fixed_ws=$(wopt "$win" @tmux-autoname-workspace)
   if [ -n "$title" ] && [ -n "$fixed_ws" ]; then
     workspace=$fixed_ws
   else
-    workspace=$(compute_workspace "$cwd" "$session")
+    workspace=$(compute_workspace "$cwd" "$session" "$session_path")
     if [ -n "$title" ] && [ -z "$fixed_ws" ] && [ -n "$workspace" ]; then
       wset "$win" @tmux-autoname-workspace "$workspace"
     fi
