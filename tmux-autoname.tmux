@@ -181,8 +181,10 @@ if [ -n "$key_pick" ]; then
   # fall back to the session name. #{window_index} is left out entirely -
   # the old format's "#{window_index}: #{@tmux-autoname-label}" duplicated
   # the index because choose-tree already prefixes window lines with it.
+  # A manually named window (name differs from the last applied name) shows
+  # its own name, not the automatic label it no longer displays.
   tmux bind-key "$key_pick" \
-    choose-tree -Zw -F '#{?window_format,#{?@tmux-autoname-label,#{@tmux-autoname-label},#{window_name}},#{session_name}}'
+    choose-tree -Zw -F '#{?window_format,#{?#{&&:#{@tmux-autoname-label},#{==:#{window_name},#{@tmux-autoname-applied}}},#{@tmux-autoname-label},#{window_name}},#{session_name}}'
 fi
 
 # Sync every window on every session, not just the current one: the loader

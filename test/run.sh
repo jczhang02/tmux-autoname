@@ -713,6 +713,14 @@ test_picker_format_no_duplicate_index() {
       ;;
   esac
   client_send Escape
+  t rename-window -t "$win" hand-named
+  client_send C-b M-p
+  if client_wait_for 'hand-named'; then
+    pass "picker shows a manual name instead of the stale label"
+  else
+    fail "picker shows a manual name instead of the stale label (got: $(client_capture))"
+  fi
+  client_send Escape
   detach_client
   stop_server
 }
