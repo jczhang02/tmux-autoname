@@ -9,6 +9,7 @@ export const eventKinds = [
   "window_changed",
   "manual_name_changed",
   "refresh_requested",
+  "new_work_requested",
 ] as const;
 
 export const semanticEventSchema = z
@@ -57,6 +58,10 @@ export type PersistedWindowState = {
   revision: number;
   record?: NameRecord;
   provenance?: "fallback" | "ai";
+  // ADR 0001: once true, the Task is accepted and automation may never
+  // replace it again; only an explicit `refresh` or `new` may. Absent (or
+  // false) means the record, if any, is still a provisional guess.
+  accepted?: boolean;
   manualName?: string;
   lastAppliedName?: string;
   callTimes?: number[];
@@ -80,6 +85,7 @@ export const persistedWindowStateSchema: z.ZodType<PersistedWindowState> = z.obj
     })
     .optional(),
   provenance: z.enum(["fallback", "ai"]).optional(),
+  accepted: z.boolean().optional(),
   manualName: z.string().optional(),
   lastAppliedName: z.string().optional(),
   callTimes: z.array(z.number().int().nonnegative()).max(1000).optional(),
@@ -120,13 +126,22 @@ export type ScopeCandidates = {
   areas: ScopeCandidate[];
 };
 
-export const nameProposalSchema = z.object({
-  workspaceId: z.string(),
-  areaId: z.string().nullable(),
-  task: z.string(),
-  taskDecision: z.enum(["keep", "replace"]),
-  confidence: z.number().min(0).max(1),
-});
+// ADR 0002 (D5): the model may propose a Task, ask to keep the previous one
+// (only meaningful on an explicit refresh), or abstain outright. Abstention
+// and "keep" are distinct, normal outcomes, not errors.
+export const nameProposalSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("propose"),
+      workspaceId: z.string(),
+      areaId: z.string().nullable(),
+      task: z.string(),
+      confidence: z.number().min(0).max(1),
+    })
+    .strict(),
+  z.object({ outcome: z.literal("keep") }).strict(),
+  z.object({ outcome: z.literal("abstain") }).strict(),
+]);
 
 export type NameProposal = z.infer<typeof nameProposalSchema>;
 
@@ -467,12 +482,28 @@ export const isValidTask = (task: string): boolean => {
   return !isRefusalShaped(task);
 };
 
-export const acceptProposal = (
+export type ProposalResolution =
+  | { kind: "accepted"; record: NameRecord }
+  | { kind: "kept" }
+  | { kind: "abstained" };
+
+// ADR 0002 (D5, D7): turns a raw model proposal into one of three normal
+// outcomes. "kept" only makes sense when there is a previous Task to keep
+// (i.e. on refresh); anything else -- a bare "keep" with nothing to keep, a
+// below-threshold proposal, an ungrounded workspace/area id, or a task slug
+// that is still refusal-shaped after deterministic repair -- resolves to
+// abstention rather than an error, per D5/D7.
+export const resolveProposal = (
   proposal: NameProposal,
   request: NameRequest,
   confidenceThreshold: number,
-): NameRecord | undefined => {
-  if (proposal.confidence < confidenceThreshold) return undefined;
+): ProposalResolution => {
+  if (proposal.outcome === "abstain") return { kind: "abstained" };
+  if (proposal.outcome === "keep") {
+    return request.previous?.task ? { kind: "kept" } : { kind: "abstained" };
+  }
+
+  if (proposal.confidence < confidenceThreshold) return { kind: "abstained" };
   const workspace = request.candidates.workspaces.find(
     (candidate) => candidate.id === proposal.workspaceId,
   );
@@ -482,18 +513,24 @@ export const acceptProposal = (
   if (
     !workspace ||
     (proposal.areaId !== null && (!area || area.workspaceId !== workspace.id))
-  ) return undefined;
+  ) {
+    return { kind: "abstained" };
+  }
 
-  const rawTask = proposal.taskDecision === "keep" ? request.previous?.task : proposal.task;
-  const task = rawTask ? normalizeTask(rawTask) : undefined;
-  if (!task || !isValidTask(task)) return undefined;
+  // D7: repair deterministic formatting slips before validation; a slug
+  // that is still refusal-shaped (or empty) after repair is abstention.
+  const task = normalizeTask(proposal.task);
+  if (!task || !isValidTask(task)) return { kind: "abstained" };
 
   return {
-    scope: area
-      ? { workspace: workspace.value, area: area.value }
-      : { workspace: workspace.value },
-    task,
-    activity: request.activity,
+    kind: "accepted",
+    record: {
+      scope: area
+        ? { workspace: workspace.value, area: area.value }
+        : { workspace: workspace.value },
+      task,
+      activity: request.activity,
+    },
   };
 };
 

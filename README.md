@@ -26,6 +26,7 @@ The plugin runs asynchronously. It keeps manual names intact and never opens a p
 - Process detection looks through Linux `systemd-run` wrappers, so tools such as `codex` and `pi` keep their own activity names.
 - The screen monitor works with terminal programs directly. You do not need a Codex, Claude Code, Pi, or editor extension.
 - AI runs after useful evidence changes and the visible screen settles. Duplicate prompt redraws do not trigger another request.
+- Once a window's Task is accepted, it is stable: automation never replaces it again, even across a Workspace, directory, or activity change. Only an explicit `tmux-autoname refresh` (keeps the old label until a replacement is accepted) or `tmux-autoname new` (starts new work, see below) can change it.
 - Scope IDs, revisions, and evidence fingerprints are checked before a generated name is accepted. Late or malformed results are discarded.
 - Local process and path metadata stays current for every pane. Terminal text is captured only from panes visible in attached clients.
 
@@ -170,14 +171,17 @@ User-facing commands:
 
 | Command | What it does |
 |---|---|
-| `tmux-autoname refresh` | Requests inference now, waits for the final applied, failed, or blocked result, and prints it |
+| `tmux-autoname refresh` | Re-identification: requests inference now, waits for the final applied, failed, or blocked result, and prints it. Keeps the old label until a replacement is accepted, including on failure or abstention |
+| `tmux-autoname new` | New Work: discards the window's Task, shows a Workspace-only name, and waits for changed evidence before inferring again. Refuses in manual mode |
 | `tmux-autoname explain` | Prints the current name record, mode, badge, error, request counts, and circuit state without requesting inference |
 | `tmux-autoname auto` | Clears a manual name and returns the window to automatic mode |
 | `tmux-autoname secrets reload` | Restarts the daemon and reloads configuration and credentials |
 
-`refresh`, `auto`, and `explain` accept `--window @ID` or `--pane %ID`. Inside tmux they otherwise use the current pane. Add `--json` to `refresh` or `explain` for structured output.
+`refresh`, `new`, `auto`, and `explain` accept `--window @ID` or `--pane %ID`. Inside tmux they otherwise use the current pane. Add `--json` to `refresh` or `explain` for structured output.
 
-`refresh` skips the debounce and minimum call interval. Hourly quotas and the circuit breaker still apply.
+`refresh` skips the debounce and minimum call interval. Hourly quotas and the circuit breaker still apply. `new` does not reset quotas and affects only the target window.
+
+Neither `refresh` nor `new` unlocks a Manual Name; only `tmux-autoname auto` or `tmux rename-window ""` do.
 
 ### Optional zsh lifecycle events
 
@@ -196,9 +200,10 @@ No key is bound by default. Set either option before the plugin loads to bind a 
 ```tmux
 set -g @tmux-autoname-key-refresh 'M-r'
 set -g @tmux-autoname-key-auto 'M-a'
+set -g @tmux-autoname-key-new 'M-n'
 ```
 
-`@tmux-autoname-key-refresh` runs `tmux-autoname refresh` for the current window; `@tmux-autoname-key-auto` runs `tmux-autoname auto`. Both are bound in the `prefix` key table, so the example above is triggered as `prefix` + <kbd>M-r</kbd> or `prefix` + <kbd>M-a</kbd>.
+`@tmux-autoname-key-refresh` runs `tmux-autoname refresh` for the current window; `@tmux-autoname-key-auto` runs `tmux-autoname auto`; `@tmux-autoname-key-new` runs `tmux-autoname new`. All three are bound in the `prefix` key table, so the example above is triggered as `prefix` + <kbd>M-r</kbd>, `prefix` + <kbd>M-a</kbd>, or `prefix` + <kbd>M-n</kbd>.
 
 ## Window-tab badges
 
@@ -249,7 +254,7 @@ A local steady-state test with one visible pane averaged 0.7% CPU for 30 seconds
 
 ```toml
 [limits]
-minimum_call_interval_ms = 30000
+minimum_call_interval_ms = 120000
 max_calls_per_window_hour = 3
 max_calls_per_server_hour = 15
 ```

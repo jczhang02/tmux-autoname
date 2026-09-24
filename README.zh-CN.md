@@ -26,6 +26,7 @@ nvim:website/fix-mobile-navigation
 - 在 Linux 上，进程解析会穿透 `systemd-run` 包装，因此 `codex` 和 `pi` 仍显示自己的名字。
 - 屏幕监控直接读取终端内容，不要求安装 Codex、Claude Code、Pi 或编辑器扩展。
 - 有效信息发生变化并且屏幕稳定后，插件才会调用 AI。重复绘制的 shell prompt 不会产生新请求。
+- window 的 Task 一旦被接受，就是稳定的：即使 Workspace、目录或 activity 发生变化，自动化也不会再替换它。只有显式的 `tmux-autoname refresh`（在有新结果被接受前保留旧名称）或 `tmux-autoname new`（开始新工作，见下文）才能改变它。
 - 接受名称前，插件会校验 Scope ID、状态版本和证据指纹。过期或格式错误的结果会被丢弃。
 - 所有 pane 的本地进程和路径信息都会更新。终端文本只从已连接客户端当前可见的 pane 中采集。
 
@@ -170,14 +171,17 @@ tmux rename-window ""
 
 | 命令 | 作用 |
 |---|---|
-| `tmux-autoname refresh` | 立即请求推理，等待 applied、failed 或 blocked 的最终结果并打印 |
+| `tmux-autoname refresh` | 重新识别：立即请求推理，等待 applied、failed 或 blocked 的最终结果并打印。在新结果被接受前保留旧名称，包括推理失败或放弃时 |
+| `tmux-autoname new` | 开始新工作：丢弃 window 的 Task，显示仅含 Workspace 的名称，并等待变化的证据后才再次推理。手动模式下会拒绝执行 |
 | `tmux-autoname explain` | 显示当前名称记录、模式、徽标、错误、请求计数和熔断状态，不发起推理 |
 | `tmux-autoname auto` | 清除手动名称，让 window 恢复自动命名 |
 | `tmux-autoname secrets reload` | 重启 daemon，重新读取配置和凭据 |
 
-`refresh`、`auto` 和 `explain` 支持 `--window @ID` 或 `--pane %ID`。在 tmux 内不指定目标时，它们使用当前 pane。`refresh` 和 `explain` 还支持 `--json`。
+`refresh`、`new`、`auto` 和 `explain` 支持 `--window @ID` 或 `--pane %ID`。在 tmux 内不指定目标时，它们使用当前 pane。`refresh` 和 `explain` 还支持 `--json`。
 
-`refresh` 会跳过 debounce 和最小请求间隔，但仍受每小时配额与熔断器限制。
+`refresh` 会跳过 debounce 和最小请求间隔，但仍受每小时配额与熔断器限制。`new` 不会重置配额，且只影响目标 window。
+
+`refresh` 和 `new` 都不会解锁 Manual Name；只有 `tmux-autoname auto` 或 `tmux rename-window ""` 才能做到。
 
 ### 可选的 zsh 生命周期事件
 
@@ -196,9 +200,10 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```tmux
 set -g @tmux-autoname-key-refresh 'M-r'
 set -g @tmux-autoname-key-auto 'M-a'
+set -g @tmux-autoname-key-new 'M-n'
 ```
 
-`@tmux-autoname-key-refresh` 会为当前 window 运行 `tmux-autoname refresh`；`@tmux-autoname-key-auto` 会运行 `tmux-autoname auto`。两者都绑定在 `prefix` 按键表中，因此上面的例子需要按 `prefix` + <kbd>M-r</kbd> 或 `prefix` + <kbd>M-a</kbd> 触发。
+`@tmux-autoname-key-refresh` 会为当前 window 运行 `tmux-autoname refresh`；`@tmux-autoname-key-auto` 会运行 `tmux-autoname auto`；`@tmux-autoname-key-new` 会运行 `tmux-autoname new`。三者都绑定在 `prefix` 按键表中，因此上面的例子需要按 `prefix` + <kbd>M-r</kbd>、`prefix` + <kbd>M-a</kbd> 或 `prefix` + <kbd>M-n</kbd> 触发。
 
 ## Window tab 徽标
 
@@ -249,7 +254,7 @@ Agent 完成提醒与本插件无关。tmux-autoname 不发送或读取 OSC 通�
 
 ```toml
 [limits]
-minimum_call_interval_ms = 30000
+minimum_call_interval_ms = 120000
 max_calls_per_window_hour = 3
 max_calls_per_server_hour = 15
 ```

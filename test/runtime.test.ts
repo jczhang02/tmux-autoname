@@ -15,8 +15,10 @@ import {
   FakeClock,
   FakeModel,
   FakeTmux,
+  abstainProposal,
   deferred,
   flush,
+  keepProposal,
   proposalFor,
   windowSnapshot,
 } from "./helpers";
@@ -169,7 +171,10 @@ describe("AutonameRuntime interface", () => {
     expect((await runtime.explain({ windowId: "@1" })).mode).toBe("automatic");
   });
 
-  test("changed terminal content can replace the task without an agent extension", async () => {
+  // ADR 0001: automation may establish a Task from settled terminal content,
+  // but once accepted it may never replace it again on further automatic
+  // evidence, even genuinely new terminal content.
+  test("settled terminal content establishes a Task once, then never replaces it automatically", async () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot());
     const clock = new FakeClock();
@@ -178,11 +183,17 @@ describe("AutonameRuntime interface", () => {
 
     await runtime.handle(event("content_settled"));
     await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(true);
+
     tmux.setContent("%1", "User: investigate daemon resource usage");
     await runtime.handle(event("content_settled"));
     await clock.advance(10);
-    expect(model.calls).toHaveLength(2);
-    expect(model.calls[1]?.terminalContext).toContain("resource usage");
+
+    expect(model.calls).toHaveLength(1);
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
+      "redesign-naming-plugin",
+    );
   });
 
   test("rejects an older model result that finishes after a forced refresh", async () => {
@@ -313,7 +324,10 @@ describe("AutonameRuntime interface", () => {
     const first = new AutonameRuntime({ tmux, model: firstModel, clock, config: limits });
 
     await first.handle(event("window_changed"));
-    tmux.setPath("@1", "/home/jc/dev/partjobs/first-quota-path");
+    // A genuine cross-Workspace move (outside the session root, with its own
+    // Git root), not just a subdirectory change, so this is a valid
+    // pre-acceptance trigger (ADR 0002).
+    tmux.setPath("@1", "/tmp/first-quota-path", "/tmp/first-quota-path");
     await first.handle(event("window_changed"));
     await clock.advance(10);
     expect(firstModel.calls).toHaveLength(1);
@@ -321,7 +335,9 @@ describe("AutonameRuntime interface", () => {
     const secondModel = new FakeModel();
     const second = new AutonameRuntime({ tmux, model: secondModel, clock, config: limits });
     await second.explain({ windowId: "@1" });
-    tmux.setPath("@1", "/home/jc/dev/partjobs/second-quota-path");
+    // The Task is now accepted, so even another Workspace move must not
+    // call the model again (ADR 0001).
+    tmux.setPath("@1", "/tmp/second-quota-path", "/tmp/second-quota-path");
     await second.handle(event("window_changed"));
     await clock.advance(10);
 
@@ -561,7 +577,9 @@ describe("AutonameRuntime interface", () => {
       const tmux = new FakeTmux();
       tmux.add(windowSnapshot());
       const clock = new FakeClock();
-      const model = new FakeModel();
+      // Abstains so the Task never gets accepted (ADR 0001), keeping this
+      // window eligible for further pre-acceptance automatic attempts.
+      const model = new FakeModel(async () => abstainProposal());
       const cfg = config();
       cfg.limits.minimum_call_interval_ms = 5000;
       const runtime = new AutonameRuntime({ tmux, model, clock, config: cfg });

@@ -169,7 +169,7 @@ describe("AI SDK model adapter", () => {
       });
       const result = await model.propose(request, new AbortController().signal);
 
-      expect(result.task).toBe("redesign-naming-plugin");
+      expect(result).toMatchObject({ outcome: "propose", task: "redesign-naming-plugin" });
       expect(requests).toHaveLength(1);
       expect(requests[0]?.body.max_tokens).toBe(512);
       expect(JSON.stringify(requests[0]?.body)).toContain("Please redesign the tmux naming plugin");

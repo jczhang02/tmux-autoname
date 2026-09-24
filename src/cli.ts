@@ -43,13 +43,16 @@ const reasonText = (reason: string | undefined): string => ({
   server_quota: "server AI quota reached",
   minimum_interval: "waiting for the minimum AI call interval",
   model_not_configured: "AI is not configured",
-  provider_authentication_failed: "provider rejected the credential",
-  secret_unavailable: "credential is unavailable",
+  provider_authentication_failed: "provider rejected the credential; automatic attempts are paused until refresh or secrets reload",
+  secret_unavailable: "credential is unavailable; automatic attempts are paused until refresh or secrets reload",
   model_timeout: "provider request timed out",
   invalid_model_response: "provider returned invalid JSON",
-  invalid_model_proposal: "provider returned an invalid name proposal",
   evidence_changed: "pane evidence changed while AI was running",
   superseded: "a newer naming request replaced this one",
+  abstained: "AI had insufficient evidence and abstained; the previous name is kept",
+  manual_mode: "automatic naming is off; run `tmux-autoname auto` first",
+  no_trigger: "no change in evidence justifies a new request",
+  deduplicated: "evidence is unchanged since the last attempt",
 }[reason ?? ""] ?? reason ?? "no change");
 
 const formatExplain = (report: ExplainReport): string => {
@@ -66,6 +69,7 @@ const formatExplain = (report: ExplainReport): string => {
     `Scope: ${scope}`,
     `Task: ${report.record?.task || "(pending AI)"}`,
     `Source: ${report.provenance === "ai" ? "AI" : "local provisional"}`,
+    `Accepted: ${report.accepted ? "yes" : "no"}`,
     `Calls: window ${report.limits.windowCallsLastHour}/${report.limits.windowCallLimit}, server ${report.limits.serverCallsLastHour}/${report.limits.serverCallLimit}`,
     `Status: ${status}`,
   ].join("\n");
@@ -178,6 +182,19 @@ const main = async (): Promise<number> => {
       if (outcome) process.stdout.write(`${outcome.windowId} automatic → ${outcome.name ?? "ready"}\n`);
       return 0;
     }
+    case "new": {
+      const port = tmux();
+      const event = targetEvent("new_work_requested");
+      const response = await requestWithStart(port, { type: "event", event, wait: true });
+      if (!response.ok) throw new Error(response.error);
+      const outcome = response.result as RuntimeOutcome | undefined;
+      if (outcome?.kind === "ignored" && outcome.reason === "manual_mode") {
+        process.stderr.write(`${outcome.windowId} ${reasonText(outcome.reason)}\n`);
+        return 1;
+      }
+      if (outcome) process.stdout.write(`${outcome.windowId} new work → ${outcome.name ?? "ready"}\n`);
+      return 0;
+    }
     case "explain": {
       const port = tmux();
       const response = await requestWithStart(port, { type: "explain", ...explicitTarget() });
@@ -205,7 +222,7 @@ const main = async (): Promise<number> => {
     }
     default:
       process.stderr.write(
-        "usage:\n  tmux-autoname refresh [--window @N|--pane %N] [--json]\n  tmux-autoname explain [--window @N|--pane %N] [--json]\n  tmux-autoname auto [--window @N|--pane %N]\n  tmux-autoname secrets reload\n  tmux-autoname daemon [--stop]\n",
+        "usage:\n  tmux-autoname refresh [--window @N|--pane %N] [--json]\n  tmux-autoname new [--window @N|--pane %N]\n  tmux-autoname explain [--window @N|--pane %N] [--json]\n  tmux-autoname auto [--window @N|--pane %N]\n  tmux-autoname secrets reload\n  tmux-autoname daemon [--stop]\n",
       );
       return 2;
   }

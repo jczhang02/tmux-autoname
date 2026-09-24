@@ -165,12 +165,16 @@ export const proposalFor = (
   request: NameRequest,
   task = "redesign naming plugin",
 ): NameProposal => ({
+  outcome: "propose",
   workspaceId: request.candidates.workspaces[0]!.id,
   areaId: request.candidates.areas[0]?.id ?? null,
   task,
-  taskDecision: "replace",
   confidence: 0.95,
 });
+
+export const keepProposal = (): NameProposal => ({ outcome: "keep" });
+
+export const abstainProposal = (): NameProposal => ({ outcome: "abstain" });
 
 export const windowSnapshot = (overrides: Partial<TmuxWindowSnapshot> = {}): TmuxWindowSnapshot => ({
   serverId: "server-1",

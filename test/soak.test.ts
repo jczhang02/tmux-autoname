@@ -40,10 +40,10 @@ soak(
               message: {
                 role: "assistant",
                 content: JSON.stringify({
+                  outcome: "propose",
                   workspaceId,
                   areaId,
                   task: "maintain-soak-window",
-                  taskDecision: "replace",
                   confidence: 0.95,
                 }),
               },

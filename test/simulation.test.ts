@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { defaultConfig } from "../src/config";
 import { AutonameRuntime } from "../src/runtime";
-import { FakeClock, FakeModel, FakeTmux, proposalFor, windowSnapshot } from "./helpers";
+import {
+  FakeClock,
+  FakeModel,
+  FakeTmux,
+  abstainProposal,
+  proposalFor,
+  windowSnapshot,
+} from "./helpers";
 
 const simulationConfig = () => {
   const config = defaultConfig();
@@ -46,7 +53,10 @@ describe("accelerated logical-time simulation", () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot({ windowId: "@1", panes: [windowSnapshot().panes[0]!] }));
     const clock = new FakeClock();
-    const model = new FakeModel();
+    // ADR 0001: automation may establish a Task once but never replace it,
+    // so this abstains throughout to stay pre-acceptance and keep exercising
+    // the per-window rate limit across repeated automatic attempts.
+    const model = new FakeModel(async () => abstainProposal());
     const runtime = new AutonameRuntime({ tmux, model, clock, config: simulationConfig() });
 
     await runtime.handle(changed("@1"));
@@ -81,7 +91,9 @@ describe("accelerated logical-time simulation", () => {
       const pane = { ...windowSnapshot().panes[0]!, id: `%${index}` };
       tmux.add(windowSnapshot({ windowId, panes: [pane] }));
       await runtime.handle(changed(windowId));
-      tmux.setPath(windowId, `/home/jc/dev/partjobs/project-${index}`);
+      // A genuine cross-Workspace move (its own Git root outside the
+      // session path), not just a subdirectory change (ADR 0002).
+      tmux.setPath(windowId, `/tmp/project-${index}`, `/tmp/project-${index}`);
       await runtime.handle(changed(windowId));
       await clock.advance(0);
     }
@@ -116,11 +128,11 @@ describe("accelerated logical-time simulation", () => {
     }
 
     for (let index = 1; index <= 3; index += 1) {
-      tmux.setPath(`@${index}`, `/home/jc/dev/partjobs/failure-${index}`);
+      tmux.setPath(`@${index}`, `/tmp/failure-${index}`, `/tmp/failure-${index}`);
       await runtime.handle(changed(`@${index}`));
       await clock.advance(0);
     }
-    tmux.setPath("@4", "/home/jc/dev/partjobs/circuit-blocked");
+    tmux.setPath("@4", "/tmp/circuit-blocked", "/tmp/circuit-blocked");
     await runtime.handle(changed("@4"));
     await clock.advance(0);
     expect(model.calls).toHaveLength(3);
@@ -139,13 +151,13 @@ describe("accelerated logical-time simulation", () => {
     });
     await restarted.explain({ windowId: "@4" });
     await restarted.explain({ windowId: "@5" });
-    tmux.setPath("@4", "/home/jc/dev/partjobs/restart-still-blocked");
+    tmux.setPath("@4", "/tmp/restart-still-blocked", "/tmp/restart-still-blocked");
     await restarted.handle(changed("@4"));
     await clock.advance(0);
     expect(restartedModel.calls).toHaveLength(0);
 
     await clock.advance(10 * 60 * 1000);
-    tmux.setPath("@5", "/home/jc/dev/partjobs/recovered");
+    tmux.setPath("@5", "/tmp/recovered", "/tmp/recovered");
     await restarted.handle(changed("@5"));
     await clock.advance(0);
 

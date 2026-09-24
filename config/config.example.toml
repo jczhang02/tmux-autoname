@@ -17,10 +17,10 @@ profile = "{activity}:{scope}/{task}"
 debounce_ms = 1000
 scan_interval_ms = 3000
 content_settle_ms = 4000
-minimum_call_interval_ms = 10000
+minimum_call_interval_ms = 60000
 request_timeout_ms = 15000
 max_calls_per_window_hour = 6
 max_calls_per_server_hour = 30
-# Lower-cost alternative: 30000 ms, 3 calls/window/hour, 15 calls/server/hour.
+# Lower-cost alternative: minimum_call_interval_ms = 120000, 3 calls/window/hour, 15 calls/server/hour.
 circuit_failure_threshold = 3
 circuit_cooldown_ms = 600000

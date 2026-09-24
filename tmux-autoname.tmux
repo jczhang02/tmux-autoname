@@ -43,6 +43,11 @@ if [ -n "$key_auto" ]; then
   auto_action="out=\$(\"\$TMUX_AUTONAME_BIN\" auto --window #{window_id} 2>&1); tmux display-message \"tmux-autoname auto: \${out:-restored}\""
   tmux bind-key "$key_auto" run-shell -b "$auto_action"
 fi
+key_new=$(tmux show-option -gqv @tmux-autoname-key-new)
+if [ -n "$key_new" ]; then
+  new_action="out=\$(\"\$TMUX_AUTONAME_BIN\" new --window #{window_id} 2>&1); tmux display-message \"tmux-autoname new: \$out\""
+  tmux bind-key "$key_new" run-shell -b "$new_action"
+fi
 
 emit_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind window_changed --window #{window_id} >/dev/null 2>&1"
 rename_hook="\"\$TMUX_AUTONAME_BIN\" emit --source tmux --kind manual_name_changed --window #{window_id} --manual-name #{q:window_name} >/dev/null 2>&1"

@@ -1,6 +1,5 @@
 import type { AppConfig } from "./config";
 import {
-  acceptProposal,
   badgeText,
   buildScopeCandidates,
   deterministicScope,
@@ -10,6 +9,7 @@ import {
   normalizeActivity,
   normalizeTask,
   renderName,
+  resolveProposal,
   scopeKey,
   type BadgeState,
   type BadgeStyle,
@@ -77,6 +77,10 @@ export class ProviderAuthenticationError extends Error {
 type RuntimeWindowState = PersistedWindowState & {
   fingerprint?: string;
   lastLocalScope?: string;
+  // ADR 0002: only Workspace-level changes are a trigger; subdirectory
+  // (Area) changes within the same Workspace never are. Tracked separately
+  // from lastLocalScope, which also covers Area for provisional rendering.
+  lastLocalWorkspace?: string;
   lastProfile: string;
   badgeStyle: BadgeStyle;
   badgeState: BadgeState;
@@ -102,6 +106,7 @@ export type ExplainReport = {
   revision: number;
   record?: NameRecord;
   provenance?: "fallback" | "ai";
+  accepted: boolean;
   manualName?: string;
   visibleName: string;
   badge: { state: BadgeState; text: string; style: BadgeStyle };
@@ -132,6 +137,11 @@ export class AutonameRuntime {
   #serverRestored = false;
   #consecutiveFailures = 0;
   #circuitOpenUntil: number | undefined;
+  // ADR 0002: an auth/credential failure pauses further *automatic*
+  // attempts (server-wide, since the credential is shared) until an
+  // explicit refresh runs or `secrets reload` clears it; ordinary quota and
+  // circuit protections still apply on top of this.
+  #authPausedReason: string | undefined;
 
   constructor(options: {
     tmux: TmuxPort;
@@ -187,6 +197,7 @@ export class AutonameRuntime {
       windowId: snapshot.windowId,
       mode: state.mode,
       revision: state.revision,
+      accepted: state.accepted ?? false,
       visibleName: snapshot.windowName,
       badge: {
         state: state.badgeState,
@@ -217,6 +228,7 @@ export class AutonameRuntime {
     this.clearCredential();
     this.#consecutiveFailures = 0;
     this.#circuitOpenUntil = undefined;
+    this.#authPausedReason = undefined;
     await this.#saveServer();
   }
 
@@ -238,6 +250,9 @@ export class AutonameRuntime {
     if (event.kind === "manual_name_changed") {
       return this.#handleManual(event, snapshot, state);
     }
+    if (event.kind === "new_work_requested") {
+      return this.#handleNewWork(snapshot, state);
+    }
 
     const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
     if (!active) {
@@ -245,7 +260,7 @@ export class AutonameRuntime {
     }
 
     const candidates = buildScopeCandidates(snapshot);
-    const { scopeChanged, activity } = await this.#updateLocalRecord(
+    const { workspaceChanged, activity } = await this.#updateLocalRecord(
       snapshot,
       state,
       candidates,
@@ -257,7 +272,7 @@ export class AutonameRuntime {
       return { kind: "manual", windowId: snapshot.windowId, name: state.manualName };
     }
 
-    const { shouldInfer, forced } = this.#decideTrigger(event, state, scopeChanged);
+    const { shouldInfer, forced } = this.#decideTrigger(event, state, workspaceChanged);
     if (!shouldInfer) {
       return { kind: "ignored", windowId: snapshot.windowId, reason: "no_trigger" };
     }
@@ -280,22 +295,42 @@ export class AutonameRuntime {
 
   /**
    * Keeps the local (non-AI) Name Record in sync with deterministic Scope
-   * and Activity, applying or re-rendering it as needed. Returns whether the
-   * local Scope changed and the current Activity, both needed to decide
-   * whether an inference attempt is justified.
+   * and Activity, applying or re-rendering it as needed. Returns whether
+   * the local Workspace changed and the current Activity, both needed to
+   * decide whether an inference attempt is justified.
+   *
+   * ADR 0001: once a Task is accepted, its Scope and Task are frozen --
+   * automation may never replace them again, regardless of Workspace,
+   * cwd, or activity changes. Only Activity, which is live information and
+   * not part of the Name Record's durable identity, keeps re-rendering.
    */
   async #updateLocalRecord(
     snapshot: TmuxWindowSnapshot,
     state: RuntimeWindowState,
     candidates: ReturnType<typeof buildScopeCandidates>,
     active: TmuxPane,
-  ): Promise<{ scopeChanged: boolean; activity: string }> {
+  ): Promise<{ workspaceChanged: boolean; activity: string }> {
+    const activity = normalizeActivity(active.command);
+
+    if (state.accepted) {
+      if (state.record && state.record.activity !== activity) {
+        state.record = { ...state.record, activity };
+        if (state.mode === "automatic") await this.#applyRecord(snapshot, state);
+        else await this.#save(snapshot.windowId, state);
+      }
+      return { workspaceChanged: false, activity };
+    }
+
     const localScope = deterministicScope(candidates);
     const localScopeKey = scopeKey(localScope);
     const scopeChanged =
       state.lastLocalScope !== undefined && state.lastLocalScope !== localScopeKey;
+    // ADR 0002: subdirectory (Area) changes within the same Workspace never
+    // justify an inference attempt; only a Workspace-level change does.
+    const workspaceChanged =
+      state.lastLocalWorkspace !== undefined && state.lastLocalWorkspace !== localScope.workspace;
     state.lastLocalScope = localScopeKey;
-    const activity = normalizeActivity(active.command);
+    state.lastLocalWorkspace = localScope.workspace;
     const activityChanged = state.record?.activity !== activity;
     const firstRecord = state.record === undefined;
 
@@ -316,14 +351,14 @@ export class AutonameRuntime {
       }
     }
 
-    return { scopeChanged, activity };
+    return { workspaceChanged, activity };
   }
 
   /** Pure trigger decision: does this event justify an inference attempt, and is it forced (bypasses the minimum call interval)? */
   #decideTrigger(
     event: SemanticEvent,
     state: RuntimeWindowState,
-    scopeChanged: boolean,
+    workspaceChanged: boolean,
   ): { shouldInfer: boolean; forced: boolean } {
     let shouldInfer = false;
     let forced = false;
@@ -333,18 +368,62 @@ export class AutonameRuntime {
       forced = true;
     }
 
-    if (scopeChanged) shouldInfer = true;
-    if (event.kind === "content_settled") shouldInfer = true;
+    // ADR 0001: automation may establish but never replace an accepted
+    // Task, so only the explicit refresh handled above may reach the model.
+    if (state.accepted) return { shouldInfer, forced };
 
-    if (
-      event.kind === "command_finished" &&
-      state.provenance !== "ai" &&
-      isMeaningfulCommand(event.commandName)
-    ) {
+    if (workspaceChanged) shouldInfer = true;
+    if (event.kind === "content_settled") shouldInfer = true;
+    if (event.kind === "command_finished" && isMeaningfulCommand(event.commandName)) {
       shouldInfer = true;
     }
 
     return { shouldInfer, forced };
+  }
+
+  /**
+   * `tmux-autoname new` (New Work, ADR 0001): explicitly discards the
+   * Window's Task, leaving a Workspace-only Provisional Name, and records
+   * the current evidence fingerprint as a D1 baseline so residual on-screen
+   * content from the discarded Task cannot by itself trigger a fresh
+   * automatic attempt. Refuses in manual mode. Does not touch quotas.
+   */
+  async #handleNewWork(
+    snapshot: TmuxWindowSnapshot,
+    state: RuntimeWindowState,
+  ): Promise<RuntimeOutcome> {
+    if (state.mode === "manual") {
+      return { kind: "ignored", windowId: snapshot.windowId, reason: "manual_mode" };
+    }
+
+    const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
+    const candidates = buildScopeCandidates(snapshot);
+    const localScope = deterministicScope(candidates);
+    const terminalContext = active
+      ? await this.#tmux.capturePane(active.id).catch(() => "")
+      : "";
+
+    state.revision += 1;
+    state.inFlight?.abort();
+    if (state.pendingTimer !== undefined) {
+      this.#clock.clearTimeout(state.pendingTimer);
+      state.pendingTimer = undefined;
+    }
+    state.accepted = false;
+    state.provenance = "fallback";
+    state.record = {
+      scope: { workspace: localScope.workspace },
+      task: "",
+      activity: normalizeActivity(active?.command ?? ""),
+    };
+    state.lastLocalScope = scopeKey(localScope);
+    state.lastLocalWorkspace = localScope.workspace;
+    state.fingerprint = evidenceFingerprint(snapshot, candidates, terminalContext);
+    state.lastError = undefined;
+
+    await this.#applyRecord(snapshot, state);
+    await this.#setBadge(snapshot.windowId, state, "healthy");
+    return { kind: "applied", windowId: snapshot.windowId, name: state.lastAppliedName };
   }
 
   /**
@@ -368,9 +447,11 @@ export class AutonameRuntime {
     }
 
     if (!this.#model) {
+      // ADR 0002: missing AI configuration is a normal outcome, not an
+      // error badge; `explain` still surfaces the reason.
       state.lastError = "model_not_configured";
-      await this.#setBadge(snapshot.windowId, state, "failed");
-      return { kind: "failed", windowId: snapshot.windowId, reason: state.lastError };
+      await this.#save(snapshot.windowId, state);
+      return { kind: "ignored", windowId: snapshot.windowId, reason: state.lastError };
     }
 
     const now = this.#clock.now();
@@ -457,10 +538,13 @@ export class AutonameRuntime {
     }
 
     const now = this.#clock.now();
+    // ADR 0002: an explicit refresh is the thing that lifts an auth pause,
+    // whether or not this particular attempt succeeds.
+    if (forced) this.#authPausedReason = undefined;
     const blocked = this.#blockedReason(state, now, forced);
     if (blocked) {
       state.lastError = blocked;
-      await this.#setBadge(windowId, state, "failed");
+      await this.#setBadge(windowId, state, "healthy");
       return { kind: "ignored", windowId, reason: blocked };
     }
 
@@ -490,19 +574,36 @@ export class AutonameRuntime {
         return { kind: "ignored", windowId, reason: "superseded" };
       }
 
-      const record = acceptProposal(
+      // ADR 0002 (D5): a proposal that came back at all -- accepted, kept,
+      // or abstained -- is not an inference failure; it breaks the
+      // consecutive-failure streak and lifts any auth pause.
+      const resolution = resolveProposal(
         proposal,
         request,
         this.#config.ai?.confidence_threshold ?? 0.6,
       );
-      if (!record) throw new Error("invalid_model_proposal");
-
-      current.record = record;
-      current.provenance = "ai";
       current.lastError = undefined;
       this.#consecutiveFailures = 0;
       this.#circuitOpenUntil = undefined;
+      this.#authPausedReason = undefined;
       await this.#saveServer();
+
+      if (resolution.kind === "accepted") {
+        current.record = resolution.record;
+        current.provenance = "ai";
+        current.accepted = true;
+      } else if (resolution.kind === "kept") {
+        // Only reachable when there was a previous Task to keep (refresh).
+        current.accepted = true;
+        current.provenance = "ai";
+      }
+
+      if (resolution.kind === "abstained") {
+        await this.#save(windowId, current);
+        await this.#setBadge(windowId, current, "healthy");
+        return { kind: "ignored", windowId, reason: "abstained" };
+      }
+
       await this.#applyRecord(liveSnapshot, current);
       if (current.lastError === "tmux_write_failed") {
         return { kind: "failed", windowId, reason: current.lastError };
@@ -522,6 +623,9 @@ export class AutonameRuntime {
         error instanceof SecretUnavailableError || error instanceof ProviderAuthenticationError;
       if (error instanceof ProviderAuthenticationError) this.#model?.clearCredential();
       current.lastError = safeErrorCode(error);
+      // ADR 0002: an auth/credential failure pauses further automatic
+      // attempts until an explicit refresh or `secrets reload`.
+      if (secretFailure) this.#authPausedReason = current.lastError;
       this.#consecutiveFailures += 1;
       if (this.#consecutiveFailures >= this.#config.limits.circuit_failure_threshold) {
         this.#circuitOpenUntil = this.#clock.now() + this.#config.limits.circuit_cooldown_ms;
@@ -605,6 +709,15 @@ export class AutonameRuntime {
     const candidates = buildScopeCandidates(snapshot);
     const localScope = deterministicScope(candidates);
     const persisted = snapshot.persisted;
+    const accepted = persisted?.accepted ?? false;
+    // ADR 0001: an accepted Task's Workspace affiliation is fixed and
+    // survives daemon restart even if it no longer looks "grounded" against
+    // freshly computed candidates. Only a still-provisional (not yet
+    // accepted) persisted Scope is re-validated and, if ungrounded,
+    // discarded back to a fresh fallback on the next local-record update.
+    const persistedRecord = persisted?.record;
+    const ungrounded =
+      !accepted && persistedRecord !== undefined && !isGroundedScope(persistedRecord.scope, candidates);
     const state: RuntimeWindowState = {
       mode: persisted?.mode ?? "automatic",
       revision: persisted?.revision ?? 0,
@@ -612,13 +725,11 @@ export class AutonameRuntime {
         ? { record: { ...persisted.record, task: normalizeTask(persisted.record.task) } }
         : {}),
       ...(persisted?.provenance ? { provenance: persisted.provenance } : {}),
+      accepted,
       ...(persisted?.manualName ? { manualName: persisted.manualName } : {}),
       ...(persisted?.lastAppliedName ? { lastAppliedName: persisted.lastAppliedName } : {}),
-      lastLocalScope: scopeKey(
-        persisted?.record && !isGroundedScope(persisted.record.scope, candidates)
-          ? persisted.record.scope
-          : localScope,
-      ),
+      lastLocalScope: scopeKey(ungrounded ? persistedRecord!.scope : localScope),
+      lastLocalWorkspace: ungrounded ? persistedRecord!.scope.workspace : localScope.workspace,
       lastProfile: snapshot.displayProfile ?? this.#config.display.profile,
       badgeStyle: snapshot.badgeStyle ?? "plain",
       badgeState: persisted?.mode === "manual" ? "manual" : "healthy",
@@ -635,6 +746,9 @@ export class AutonameRuntime {
     this.#pruneCalls(state, now);
     if (this.#circuitOpenUntil !== undefined && now < this.#circuitOpenUntil) {
       return "circuit_open";
+    }
+    if (!forced && this.#authPausedReason !== undefined) {
+      return this.#authPausedReason;
     }
     if (
       !forced &&
@@ -711,6 +825,7 @@ export class AutonameRuntime {
       revision: state.revision,
       ...(state.record ? { record: state.record } : {}),
       ...(state.provenance ? { provenance: state.provenance } : {}),
+      ...(state.accepted ? { accepted: state.accepted } : {}),
       ...(state.manualName ? { manualName: state.manualName } : {}),
       ...(state.lastAppliedName ? { lastAppliedName: state.lastAppliedName } : {}),
       ...(state.callTimes.length > 0 ? { callTimes: state.callTimes } : {}),
@@ -763,9 +878,7 @@ const safeErrorCode = (error: unknown): string => {
   if (error instanceof ProviderAuthenticationError) return "provider_authentication_failed";
   if (error instanceof Error) {
     if (error.name === "AbortError" || error.message === "model_timeout") return "model_timeout";
-    if (["invalid_model_proposal", "invalid_model_response"].includes(error.message)) {
-      return error.message;
-    }
+    if (error.message === "invalid_model_response") return error.message;
   }
   return "model_failed";
 };
