@@ -1,10 +1,11 @@
 # Stable window work labels
 
-Status: Accepted. Date: 2026-09-23.
+Status: Accepted. Implemented. Date: 2026-09-23.
 
 ## Context
 
-The baseline is SPEC.md v3, which this revises; not yet implemented. SPEC.md
+The baseline was SPEC.md v3, which this revises; SPEC.md has since been
+updated to match (STAGE 6 documentation sync). SPEC.md
 treats Task as closely tied to recent screen content and does not define how
 long an accepted label survives, when it may be replaced, or what explicit
 commands do to it. This ADR fixes the meaning and lifecycle of the Task and

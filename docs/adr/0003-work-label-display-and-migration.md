@@ -1,10 +1,11 @@
 # Work-label display and migration
 
-Status: Accepted. Date: 2026-09-23.
+Status: Accepted. Implemented. Date: 2026-09-23.
 
 ## Context
 
-The baseline is SPEC.md v3, which this revises; not yet implemented. SPEC.md
+The baseline was SPEC.md v3, which this revises; SPEC.md has since been
+updated to match (STAGE 6 documentation sync). SPEC.md
 defines Scope as Workspace plus an optional Area and displays
 `{activity}:{scope}/{task}` by default. This ADR removes Area and Activity
 from the durable label and its default display, and defines the one-time
