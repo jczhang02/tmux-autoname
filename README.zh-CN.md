@@ -7,23 +7,25 @@
 tmux-autoname 根据当前工作内容命名 tmux window，不再只是重复显示前台进程名。
 
 ```text
-codex:tmux-autoname/improve-process-detection
-pi:partjobs/client-a/review-payment-flow
-nvim:website/fix-mobile-navigation
+tmux-autoname/improve-process-detection
+partjobs/review-payment-flow
+website/fix-mobile-navigation
 ```
 
-默认格式是 `activity:scope/task`。
+默认格式是 `scope/task`。
 
-- Activity 来自当前 pane 的前台进程。
-- Scope 根据 tmux、cwd、Git 和路径信息生成候选项。模型只能选择本地候选项，不能编造路径。
+- Scope 是 Workspace：根据 tmux、cwd、Git 和路径信息生成候选项。模型只能选择本地候选项，不能编造路径。
 - Task 根据有限的终端内容生成，由 2 到 5 个小写英文单词组成，单词之间使用连字符。
+- Activity（当前 pane 的前台进程）不再出现在名称中。它仍会实时追踪，作为模型的参考证据，并可通过 `tmux-autoname explain` 查看，但不再显示在 window 标题里；Workspace 根目录以下的子目录（Area）也不再显示。
+
+> **从旧版本升级：** 已接受的名称会被保留，但会一次性重新渲染，去掉 Activity 和 Area 后缀，改用新的 `scope/task` 格式。如果自定义显示模板中包含 `{activity}`，在你修改模板之前会改用默认格式渲染，并在 `tmux-autoname explain` 中报告诊断信息。
 
 插件异步运行，不会覆盖手动名称，也不会弹出提示或 popup。window tab 上的小徽标会显示当前状态。
 
 ## 工作方式
 
-- 进入子目录后，名称仍会保留这层信息。例如，`partjobs` session 进入 `client-a` 后，可以显示为 `pi:partjobs/client-a/review-payment-flow`。
-- 在 Linux 上，进程解析会穿透 `systemd-run` 包装，因此 `codex` 和 `pi` 仍显示自己的名字。
+- Scope 只跟踪 Workspace 根目录，不跟踪你所在的子目录。无论在 `partjobs` session 的根目录还是进入若干层子目录之后，名称都保持为 `partjobs/review-payment-flow`。
+- 在 Linux 上，进程解析会穿透 `systemd-run` 包装，因此 `codex` 和 `pi` 在证据采集和 `explain` 中仍显示自己的名字。
 - 屏幕监控直接读取终端内容，不要求安装 Codex、Claude Code、Pi 或编辑器扩展。
 - 有效信息发生变化并且屏幕稳定后，插件才会调用 AI。重复绘制的 shell prompt 不会产生新请求。
 - window 的 Task 一旦被接受，就是稳定的：即使 Workspace、目录或 activity 发生变化，自动化也不会再替换它。只有显式的 `tmux-autoname refresh`（在有新结果被接受前保留旧名称）或 `tmux-autoname new`（开始新工作，见下文）才能改变它。

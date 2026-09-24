@@ -7,23 +7,25 @@ English | [简体中文](README.zh-CN.md)
 tmux-autoname gives tmux windows names that describe the current work instead of repeating the foreground executable.
 
 ```text
-codex:tmux-autoname/improve-process-detection
-pi:partjobs/client-a/review-payment-flow
-nvim:website/fix-mobile-navigation
+tmux-autoname/improve-process-detection
+partjobs/review-payment-flow
+website/fix-mobile-navigation
 ```
 
-The default format is `activity:scope/task`.
+The default format is `scope/task`.
 
-- Activity comes from the active foreground process.
-- Scope comes from tmux, cwd, Git, and path evidence. The model selects from local candidates and cannot invent a path.
+- Scope is the Workspace: tmux, cwd, Git, and path evidence. The model selects from local candidates and cannot invent a path.
 - Task is a validated English action slug with 2 to 5 lower-case words joined by hyphens.
+- Activity (the active foreground process) is no longer part of the name. It is still tracked live and shown by `tmux-autoname explain`, as evidence for the model, but it never appears in the window title, and a directory below the Workspace root (Area) is no longer shown either.
+
+> **Upgrading from an older version:** existing accepted names are kept, but are re-rendered once to drop Activity and any Area suffix, matching the new `scope/task` format. A custom display template containing `{activity}` now renders with the default format instead and reports a diagnostic (see `tmux-autoname explain`) until you remove `{activity}` from it.
 
 The plugin runs asynchronously. It keeps manual names intact and never opens a prompt or popup. A small badge in the window tab reports its state.
 
 ## How it works
 
-- Nested directories remain visible. A `partjobs` session can use a name such as `pi:partjobs/client-a/review-payment-flow` after you enter `client-a`.
-- Process detection looks through Linux `systemd-run` wrappers, so tools such as `codex` and `pi` keep their own activity names.
+- Scope only tracks the Workspace root, not the subdirectory you are in. A `partjobs` session stays named `partjobs/review-payment-flow` whether you are at the session root or several directories below it.
+- Process detection looks through Linux `systemd-run` wrappers, so tools such as `codex` and `pi` keep their own activity names for evidence and `explain` purposes.
 - The screen monitor works with terminal programs directly. You do not need a Codex, Claude Code, Pi, or editor extension.
 - AI runs after useful evidence changes and the visible screen settles. Duplicate prompt redraws do not trigger another request.
 - Once a window's Task is accepted, it is stable: automation never replaces it again, even across a Workspace, directory, or activity change. Only an explicit `tmux-autoname refresh` (keeps the old label until a replacement is accepted) or `tmux-autoname new` (starts new work, see below) can change it.
