@@ -70,12 +70,47 @@ for status_option in window-status-format window-status-current-format; do
   esac
 done
 
-# Remove obsolete global options. Per-window @tmux-autoname-state and
-# @tmux-autoname-badge are left in place: they die with their windows and
-# are simply never read by the new implementation.
+# Remove obsolete global options.
 for old_option in @tmux-autoname-profile @tmux-autoname-server-state \
   @tmux-autoname-badge-style @tmux-autoname-install-badge; do
   tmux set-option -gu "$old_option" 2>/dev/null || true
+done
+
+# Migrate per-window state left by the pre-0.6 version: @tmux-autoname-state
+# is base64 JSON like {"mode":"manual"|"automatic",...} and
+# @tmux-autoname-badge is the old badge text. A window with mode "manual"
+# must never be renamed by sync, so it is marked manual with a sentinel that
+# can never equal a real window name (an old daemon-driven install also
+# leaves window-local automatic-rename off, which the heuristic below would
+# otherwise also call manual - harmless, but the explicit state always wins
+# because it is applied first). A window with mode "automatic" is left for
+# the new plugin to take over from scratch. If the state can't be decoded,
+# treat it as manual: never overwrite a name when uncertain.
+MIGRATION_SENTINEL=$(printf '\001tmux-autoname:migrated-manual\001')
+for win in $(tmux list-windows -a -F '#{window_id}' 2>/dev/null); do
+  old_state=$(tmux show-option -t "$win" -wqv @tmux-autoname-state 2>/dev/null) || old_state=""
+  if [ -n "$old_state" ]; then
+    decoded=""
+    if out=$(printf '%s' "$old_state" | base64 -d 2>/dev/null); then
+      decoded=$out
+    elif out=$(printf '%s' "$old_state" | base64 -D 2>/dev/null); then
+      decoded=$out
+    fi
+    case "$decoded" in
+      *'"mode":"automatic"'*) : ;; # let the new plugin take over
+      *) tmux set-option -t "$win" -wq @tmux-autoname-applied "$MIGRATION_SENTINEL" ;;
+    esac
+    tmux set-option -t "$win" -wu @tmux-autoname-state 2>/dev/null || true
+    tmux set-option -t "$win" -wu @tmux-autoname-badge 2>/dev/null || true
+  else
+    applied=$(tmux show-option -t "$win" -wqv @tmux-autoname-applied 2>/dev/null) || applied=""
+    if [ -z "$applied" ]; then
+      ar=$(tmux show-options -w -t "$win" automatic-rename 2>/dev/null) || ar=""
+      case "$ar" in
+        *" off"*) tmux set-option -t "$win" -wq @tmux-autoname-applied "$MIGRATION_SENTINEL" ;;
+      esac
+    fi
+  fi
 done
 
 # --- Hooks ------------------------------------------------------------------
