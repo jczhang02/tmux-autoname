@@ -3,10 +3,22 @@
 set -eu
 
 CURRENT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-AUTONAME_BIN=${TMUX_AUTONAME_BIN:-$CURRENT_DIR/bin/tmux-autoname}
+
+# The binary path always resolves to this checkout, unless the user set
+# @tmux-autoname-bin themselves *before* the plugin loaded (e.g. in
+# .tmux.conf, above the `run-shell .../tmux-autoname.tmux` line). We never
+# read $TMUX_AUTONAME_BIN back from the process environment for this: a
+# shell that inherited it from an old install (which used to `export` it)
+# would otherwise pin every session to a stale binary. Once resolved, we
+# leave @tmux-autoname-bin alone rather than overwriting a user's setting.
+user_bin=$(tmux show-option -gqv @tmux-autoname-bin 2>/dev/null) || user_bin=""
+if [ -n "$user_bin" ]; then
+  AUTONAME_BIN=$user_bin
+else
+  AUTONAME_BIN="$CURRENT_DIR/bin/tmux-autoname"
+fi
 
 tmux set-option -gq @tmux-autoname-plugin-dir "$CURRENT_DIR"
-tmux set-option -gq @tmux-autoname-bin "$AUTONAME_BIN"
 tmux set-environment -g TMUX_AUTONAME_BIN "$AUTONAME_BIN"
 
 # run-shell executes with the tmux server's own process environment, not
