@@ -488,8 +488,9 @@ export type ProposalResolution =
   | { kind: "abstained" };
 
 // ADR 0002 (D5, D7): turns a raw model proposal into one of three normal
-// outcomes. "kept" only makes sense when there is a previous Task to keep
-// (i.e. on refresh); anything else -- a bare "keep" with nothing to keep, a
+// outcomes. "kept" is only meaningful on an explicit refresh with a
+// previous Task to keep (D5); anything else -- a bare "keep" with nothing
+// to keep, a "keep" returned for a non-refresh (automatic) trigger, a
 // below-threshold proposal, an ungrounded workspace/area id, or a task slug
 // that is still refusal-shaped after deterministic repair -- resolves to
 // abstention rather than an error, per D5/D7.
@@ -500,7 +501,9 @@ export const resolveProposal = (
 ): ProposalResolution => {
   if (proposal.outcome === "abstain") return { kind: "abstained" };
   if (proposal.outcome === "keep") {
-    return request.previous?.task ? { kind: "kept" } : { kind: "abstained" };
+    return request.event.kind === "refresh_requested" && request.previous?.task
+      ? { kind: "kept" }
+      : { kind: "abstained" };
   }
 
   if (proposal.confidence < confidenceThreshold) return { kind: "abstained" };

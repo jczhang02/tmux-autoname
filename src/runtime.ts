@@ -399,9 +399,15 @@ export class AutonameRuntime {
     const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
     const candidates = buildScopeCandidates(snapshot);
     const localScope = deterministicScope(candidates);
-    const terminalContext = active
-      ? await this.#tmux.capturePane(active.id).catch(() => "")
-      : "";
+    // ADR 0002 (D2/D4): unlike `refresh`, `new` is not listed as consent to
+    // read a hidden pane's text, so the D1 baseline below must follow the
+    // same visibility rule as every other automatic evidence read. Reading
+    // it unconditionally here would also desync the baseline from later
+    // automatic attempts, which recompute it with an empty terminal context
+    // while the window stays hidden, defeating the D1 baseline entirely.
+    const visible = active ? await this.#isWindowVisible(active.id) : false;
+    const terminalContext =
+      active && visible ? await this.#tmux.capturePane(active.id).catch(() => "") : "";
 
     state.revision += 1;
     state.inFlight?.abort();

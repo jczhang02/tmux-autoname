@@ -826,7 +826,7 @@ describe("ADR-0001 target behaviour", () => {
     );
   });
 
-  test("refresh can accept a fallback Task for the first time via 'keep'", async () => {
+  test("'keep' on an empty Workspace-only fallback abstains rather than accepting nothing", async () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot());
     const model = new FakeModel();
@@ -835,10 +835,87 @@ describe("ADR-0001 target behaviour", () => {
     await runtime.handle(event("window_changed"));
     expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
 
+    // There is no previous Task to keep yet, only a Workspace-only fallback
+    // (empty task), so "keep" has nothing to confirm and must abstain (D5).
     model.handler = async () => keepProposal();
     const outcome = await runtime.handle(event("refresh_requested"));
 
     expect(outcome).toEqual({ kind: "ignored", windowId: "@1", reason: "abstained" });
+    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
+  });
+
+  test("refresh can accept a pre-existing (not-yet-accepted) Task for the first time via 'keep'", async () => {
+    // Simulates a window whose persisted state predates the `accepted`
+    // field (an upgrade from before ADR 0001): it already carries a real
+    // AI-provenance Task, but loads as `accepted: false`. A "keep" refresh
+    // is how such a Task is confirmed into the new accepted lifecycle.
+    const tmux = new FakeTmux();
+    tmux.add(
+      windowSnapshot({
+        windowName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        persisted: {
+          mode: "automatic",
+          revision: 2,
+          record: {
+            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
+            task: "legacy-task",
+            activity: "codex",
+          },
+          provenance: "ai",
+          lastAppliedName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        },
+      }),
+    );
+    const model = new FakeModel(async () => keepProposal());
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
+
+    const outcome = await runtime.handle(event("refresh_requested"));
+
+    expect(outcome.kind).toBe("applied");
+    const report = await runtime.explain({ windowId: "@1" });
+    expect(report.accepted).toBe(true);
+    expect(report.record?.task).toBe("legacy-task");
+
+    // Now genuinely accepted: further automatic evidence must not replace it.
+    tmux.setPath("@1", "/tmp/somewhere-else", "/tmp/somewhere-else");
+    await runtime.handle(event("window_changed"));
+    expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe("legacy-task");
+  });
+
+  test("'keep' is only meaningful on refresh; a non-refresh trigger never accepts via 'keep' (D5)", async () => {
+    // Same pre-existing, not-yet-accepted legacy Task as above, but this
+    // time an ordinary automatic trigger (not `refresh`) is what reaches
+    // the model with a "keep" outcome. D5 says "keep" is only meaningful
+    // on refresh, so this must abstain rather than silently accepting the
+    // legacy Task outside of an explicit user request.
+    const tmux = new FakeTmux();
+    tmux.add(
+      windowSnapshot({
+        windowName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        persisted: {
+          mode: "automatic",
+          revision: 2,
+          record: {
+            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
+            task: "legacy-task",
+            activity: "codex",
+          },
+          provenance: "ai",
+          lastAppliedName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        },
+      }),
+    );
+    const clock = new FakeClock();
+    const model = new FakeModel(async () => keepProposal());
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    const outcome = await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+
+    expect(outcome).toEqual({ kind: "scheduled", windowId: "@1" });
+    expect(model.calls).toHaveLength(1);
     expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(false);
   });
 
@@ -920,6 +997,32 @@ describe("ADR-0001 target behaviour", () => {
     expect(outcome).toEqual({ kind: "ignored", windowId: "@1", reason: "manual_mode" });
     expect((await runtime.explain({ windowId: "@1" })).manualName).toBe("manual work");
     expect(model.calls).toHaveLength(0);
+  });
+
+  test("'new' on a hidden window baselines evidence without reading its pane text (D2/D4)", async () => {
+    // Unlike `refresh`, `new` is not listed as consent to read a hidden
+    // pane's text (D4 names only `refresh`); its D1 baseline must follow
+    // the same visibility rule as every other automatic evidence read, so
+    // that baseline stays consistent with later automatic attempts, which
+    // also see an empty terminal context while the window stays hidden.
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    tmux.hide("%1");
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
+
+    await runtime.handle(event("new_work_requested"));
+
+    // D1: residual (unchanged, still-hidden) evidence must not retrigger
+    // inference just because the window remains hidden.
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect(model.calls).toHaveLength(1);
   });
 
   test("after Task acceptance, no further automatic model calls occur regardless of trigger", async () => {
