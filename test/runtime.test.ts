@@ -671,4 +671,17 @@ describe("domain rules", () => {
     expect(isValidTask("recant-the-old-config")).toBe(true);
     expect(isValidTask("rewrite-naming-plugin")).toBe(true);
   });
+
+  test("only treats framing phrases like 'the-task' as refusal-shaped at the start of the slug", () => {
+    // "task" is core domain vocabulary (every window names a task), so
+    // matching these phrases mid-slug would reject ordinary task names.
+    expect(isValidTask("review-the-task-queue")).toBe(true);
+    expect(isValidTask("update-the-task-list")).toBe(true);
+    expect(isValidTask("define-task-issue-tracker")).toBe(true);
+    // Still refusal-shaped when the phrase opens the slug.
+    expect(isValidTask("the-task-is-unclear-please-specify")).toBe(false);
+    expect(isValidTask("here-is-the-summary-you-wanted")).toBe(false);
+    expect(isValidTask("no-task-detected-in-this-window")).toBe(false);
+    expect(isValidTask("task-is-not-defined-correctly")).toBe(false);
+  });
 });

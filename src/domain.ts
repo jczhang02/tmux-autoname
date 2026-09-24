@@ -423,7 +423,9 @@ export const normalizeTask = (task: string): string =>
     .replace(/-+/gu, "-")
     .replace(/^-+|-+$/gu, "");
 
-const refusalKeywords = [
+// Self-referential/apology tokens are never part of a legitimate task slug,
+// so they are refusal-shaped wherever in the slug they appear.
+const refusalAnywhereKeywords = [
   "sorry",
   "apologize",
   "apologies",
@@ -439,18 +441,22 @@ const refusalKeywords = [
   "ai-assistant",
   "ai-model",
   "chatbot",
-  "here-is",
-  "the-task",
-  "task-is",
-  "no-task",
 ];
 
+// These framing phrases only signal a refusal-shaped response (for example
+// "Here is the task I was given" or "The task is unclear") when they open
+// the slug. "task" is core domain vocabulary, so matching them mid-slug
+// would reject legitimate task names like "review-the-task-queue".
+const refusalPrefixKeywords = ["here-is", "the-task", "task-is", "no-task"];
+
 // Anchor each keyword between hyphens so multi-word keywords (e.g.
-// "as-an-ai") and single-word ones alike only match whole slug tokens,
-// wherever they occur in the slug rather than just as a prefix.
+// "as-an-ai") and single-word ones alike only match whole slug tokens.
 const isRefusalShaped = (task: string): boolean => {
   const padded = `-${task}-`;
-  return refusalKeywords.some((keyword) => padded.includes(`-${keyword}-`));
+  if (refusalAnywhereKeywords.some((keyword) => padded.includes(`-${keyword}-`))) return true;
+  return refusalPrefixKeywords.some(
+    (keyword) => task === keyword || task.startsWith(`${keyword}-`),
+  );
 };
 
 export const isValidTask = (task: string): boolean => {
