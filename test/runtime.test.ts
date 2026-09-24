@@ -71,7 +71,7 @@ describe("AutonameRuntime interface", () => {
     await runtime.handle(event("window_changed"));
 
     expect(tmux.get("@1").windowName).toBe(
-      "codex:partjobs/high-value-patent-rebuild/manuscript",
+      "partjobs",
     );
     expect(model.calls).toHaveLength(0);
   });
@@ -92,7 +92,7 @@ describe("AutonameRuntime interface", () => {
     expect(model.calls[0]?.terminalContext).toContain("Please redesign");
     expect(model.calls[0]?.previousProvenance).toBe("fallback");
     expect(tmux.get("@1").windowName).toBe(
-      "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
+      "partjobs/redesign-naming-plugin",
     );
   });
 
@@ -378,7 +378,7 @@ describe("AutonameRuntime interface", () => {
     expect(outcome).toEqual({
       kind: "applied",
       windowId: "@1",
-      name: "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
+      name: "partjobs/redesign-naming-plugin",
     });
     expect(model.calls).toHaveLength(1);
   });
@@ -397,23 +397,19 @@ describe("AutonameRuntime interface", () => {
     expect(outcome.kind).toBe("applied");
   });
 
-  test("a restarted runtime clears a stale badge on first reconciliation", async () => {
+  test("a restarted runtime clears a stale badge and re-renders a persisted accepted record whose stored name is stale", async () => {
     const tmux = new FakeTmux();
     tmux.add(
       windowSnapshot({
-        windowName:
-          "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+        windowName: "partjobs/redesign naming plugin",
         persisted: {
+          version: 2,
           mode: "automatic",
           revision: 2,
-          record: {
-            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
-            task: "redesign naming plugin",
-            activity: "codex",
-          },
+          record: { scope: { workspace: "partjobs" }, task: "redesign naming plugin" },
           provenance: "ai",
-          lastAppliedName:
-            "codex:partjobs/high-value-patent-rebuild/manuscript/redesign naming plugin",
+          accepted: true,
+          lastAppliedName: "partjobs/redesign naming plugin",
         },
       }),
     );
@@ -423,7 +419,7 @@ describe("AutonameRuntime interface", () => {
 
     expect(tmux.badges.at(-1)).toEqual({ windowId: "@1", badge: "" });
     expect(tmux.get("@1").windowName).toBe(
-      "codex:partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin",
+      "partjobs/redesign-naming-plugin",
     );
     expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
       "redesign-naming-plugin",
@@ -444,15 +440,12 @@ describe("AutonameRuntime interface", () => {
           },
         ],
         persisted: {
+          version: 2,
           mode: "automatic",
           revision: 2,
-          record: {
-            scope: { workspace: "tmux-autoname", area: "dev/tmux-autoname" },
-            task: "debug old scope",
-            activity: "codex",
-          },
+          record: { scope: { workspace: "an-unrelated-workspace" }, task: "debug old scope" },
           provenance: "ai",
-          lastAppliedName: "codex:tmux-autoname/dev/tmux-autoname/debug old scope",
+          lastAppliedName: "an-unrelated-workspace/debug old scope",
         },
       }),
     );
@@ -462,7 +455,6 @@ describe("AutonameRuntime interface", () => {
     const report = await runtime.explain({ windowId: "@1" });
 
     expect(report.record).toMatchObject({ scope: { workspace: "tmux-autoname" }, task: "" });
-    expect(report.record?.scope.area).toBeUndefined();
     expect(report.provenance).toBe("fallback");
   });
 
@@ -513,17 +505,51 @@ describe("AutonameRuntime interface", () => {
     const runtime = new AutonameRuntime({ tmux, model, config: config() });
 
     await runtime.handle(event("window_changed"));
-    tmux.setProfile("@1", "{scope}:{activity}/{task}");
+    tmux.setProfile("@1", "<{scope}>");
     tmux.setBadgeStyle("@1", "nerd");
     await runtime.handle(event("window_changed"));
     tmux.get("@1").windowName = "manual";
     await runtime.handle(event("manual_name_changed", { manualName: "manual" }));
 
-    expect(tmux.renames.at(-1)?.name).toBe(
-      "partjobs/high-value-patent-rebuild/manuscript:codex",
-    );
+    expect(tmux.renames.at(-1)?.name).toBe("<partjobs>");
     expect((await runtime.explain({ windowId: "@1" })).badge.text).toBe("");
     expect(model.calls).toHaveLength(0);
+  });
+
+  // D6: a custom template containing {activity} is not silently rewritten
+  // or dropped -- the window falls back to the default profile and an
+  // actionable diagnostic surfaces in `explain`, distinct from the old
+  // built-in default migrating silently (covered separately below).
+  test("D6: a custom display profile containing {activity} falls back to the default and surfaces a diagnostic", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    tmux.setProfile("@1", "{activity}::{scope}/{task}");
+    await runtime.handle(event("window_changed"));
+
+    expect(tmux.get("@1").windowName).toBe("partjobs");
+    const report = await runtime.explain({ windowId: "@1" });
+    expect(report.displayDiagnostic).toBe("display_profile_activity_unsupported");
+  });
+
+  // ADR 0003: a profile left exactly at the old built-in default (never
+  // customized by the user) migrates silently to the new default -- no
+  // diagnostic, since it is a stale literal rather than an intentional
+  // {activity} customization.
+  test("D6: the unedited old default profile migrates silently, with no diagnostic", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    tmux.setProfile("@1", "{activity}:{scope}/{task}");
+    await runtime.handle(event("window_changed"));
+
+    expect(tmux.get("@1").windowName).toBe("partjobs");
+    const report = await runtime.explain({ windowId: "@1" });
+    expect(report.displayDiagnostic).toBeUndefined();
   });
 
   // Characterization tests for #handleLocked (manual mode, dedup, rate-limit
@@ -852,17 +878,14 @@ describe("ADR-0001 target behaviour", () => {
     const tmux = new FakeTmux();
     tmux.add(
       windowSnapshot({
-        windowName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        windowName: "partjobs/legacy-task",
         persisted: {
+          version: 2,
           mode: "automatic",
           revision: 2,
-          record: {
-            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
-            task: "legacy-task",
-            activity: "codex",
-          },
+          record: { scope: { workspace: "partjobs" }, task: "legacy-task" },
           provenance: "ai",
-          lastAppliedName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+          lastAppliedName: "partjobs/legacy-task",
         },
       }),
     );
@@ -893,17 +916,14 @@ describe("ADR-0001 target behaviour", () => {
     const tmux = new FakeTmux();
     tmux.add(
       windowSnapshot({
-        windowName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+        windowName: "partjobs/legacy-task",
         persisted: {
+          version: 2,
           mode: "automatic",
           revision: 2,
-          record: {
-            scope: { workspace: "partjobs", area: "high-value-patent-rebuild/manuscript" },
-            task: "legacy-task",
-            activity: "codex",
-          },
+          record: { scope: { workspace: "partjobs" }, task: "legacy-task" },
           provenance: "ai",
-          lastAppliedName: "codex:partjobs/high-value-patent-rebuild/manuscript/legacy-task",
+          lastAppliedName: "partjobs/legacy-task",
         },
       }),
     );
@@ -933,13 +953,12 @@ describe("ADR-0001 target behaviour", () => {
       expect(model.calls).toHaveLength(1);
 
       const outcome = await runtime.handle(event("new_work_requested"));
-      expect(outcome).toEqual({ kind: "applied", windowId: "@1", name: "codex:partjobs" });
+      expect(outcome).toEqual({ kind: "applied", windowId: "@1", name: "partjobs" });
       const afterNew = await runtime.explain({ windowId: "@1" });
       expect(afterNew.accepted).toBe(false);
       expect(afterNew.record).toEqual({
         scope: { workspace: "partjobs" },
         task: "",
-        activity: "codex",
       });
 
       // D1: residual (unchanged) evidence must not retrigger inference.
@@ -1176,12 +1195,9 @@ describe("ADR-0002 normal outcomes", () => {
 });
 
 describe("domain rules", () => {
-  test("builds grounded nested candidates", () => {
+  test("builds a grounded Workspace candidate list, most-preferred first", () => {
     const candidates = buildScopeCandidates(windowSnapshot());
-    expect(candidates.workspaces[0]?.value).toBe("partjobs");
-    expect(candidates.areas[0]?.value).toBe(
-      "high-value-patent-rebuild/manuscript",
-    );
+    expect(candidates[0]?.value).toBe("partjobs");
   });
 
   test("uses the git root when the tmux session path is only the home directory", () => {
@@ -1198,10 +1214,8 @@ describe("domain rules", () => {
     });
 
     const candidates = buildScopeCandidates(snapshot);
-    expect(candidates.workspaces[0]?.value).toBe("tmux-autoname");
-    expect(candidates.workspaces.map((candidate) => candidate.value)).not.toContain("jc");
-    expect(candidates.areas.find((candidate) => candidate.workspaceId === candidates.workspaces[0]?.id))
-      .toBeUndefined();
+    expect(candidates[0]?.value).toBe("tmux-autoname");
+    expect(candidates.map((candidate) => candidate.value)).not.toContain("jc");
   });
 
   test("keeps a deliberate sesh session as Workspace across a nested git repository", () => {
@@ -1217,11 +1231,9 @@ describe("domain rules", () => {
       }),
     );
 
-    expect(candidates.workspaces[0]?.value).toBe("partjobs");
-    expect(candidates.areas[0]).toMatchObject({
-      value: "client-a/service",
-      workspaceId: candidates.workspaces[0]?.id,
-    });
+    // ADR 0003: the nested git root within the session Workspace no longer
+    // produces a separate Area candidate -- only the session Workspace.
+    expect(candidates[0]?.value).toBe("partjobs");
   });
 
   test("does not attach an outside cwd suffix to an unrooted session Workspace", () => {
@@ -1246,7 +1258,7 @@ describe("domain rules", () => {
     });
   });
 
-  test("uses supporting panes, remote hosts, common ancestors, and grounded areas", () => {
+  test("uses supporting panes, remote hosts, and common ancestors as Workspace candidates", () => {
     const active = {
       ...windowSnapshot().panes[0]!,
       cwd: "/home/jc/dev/partjobs/alpha/service",
@@ -1271,23 +1283,21 @@ describe("domain rules", () => {
       }),
     );
 
-    const workspaceValues = candidates.workspaces.map((candidate) => candidate.value);
+    const workspaceValues = candidates.map((candidate) => candidate.value);
     expect(workspaceValues).toContain("build.example.com");
     expect(workspaceValues).toContain("beta");
     expect(workspaceValues).toContain("partjobs");
-    expect(candidates.workspaces.some((candidate) => candidate.facts.includes("supporting pane cwd")))
+    expect(candidates.some((candidate) => candidate.facts.includes("supporting pane cwd")))
       .toBe(true);
-    expect(candidates.areas.every((candidate) => candidate.workspaceId)).toBe(true);
   });
 
   test("renders full names and leaves truncation to tmux", () => {
     expect(
       renderName({
-        scope: { workspace: "partjobs", area: "a/very/long/manuscript/path" },
+        scope: { workspace: "partjobs" },
         task: "rewrite-patent-draft",
-        activity: "nvim",
       }),
-    ).toBe("nvim:partjobs/a/very/long/manuscript/path/rewrite-patent-draft");
+    ).toBe("partjobs/rewrite-patent-draft");
   });
 
   test("ignores shell prompt redraws when deduplicating evidence", () => {

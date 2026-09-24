@@ -55,24 +55,32 @@ const reasonText = (reason: string | undefined): string => ({
   deduplicated: "evidence is unchanged since the last attempt",
 }[reason ?? ""] ?? reason ?? "no change");
 
+const displayDiagnosticText = (diagnostic: string): string => ({
+  display_profile_activity_unsupported:
+    "display profile contains {activity}, which is no longer part of the Name Record (ADR 0003); rendering with the default profile until the template is fixed",
+}[diagnostic] ?? diagnostic);
+
 const formatExplain = (report: ExplainReport): string => {
-  const scope = report.record?.scope.area
-    ? `${report.record.scope.workspace}/${report.record.scope.area}`
-    : report.record?.scope.workspace ?? "(pending)";
   const status = report.lastError
     ? reasonText(report.lastError)
     : report.badge.state === "generating" ? "generating" : "ready";
-  return [
+  const lines = [
     `${report.windowId} ${report.mode}`,
     `Name: ${report.visibleName}`,
-    `Activity: ${report.record?.activity ?? "(pending)"}`,
-    `Scope: ${scope}`,
+    `Scope: ${report.record?.scope.workspace ?? "(pending)"}`,
     `Task: ${report.record?.task || "(pending AI)"}`,
     `Source: ${report.provenance === "ai" ? "AI" : "local provisional"}`,
     `Accepted: ${report.accepted ? "yes" : "no"}`,
     `Calls: window ${report.limits.windowCallsLastHour}/${report.limits.windowCallLimit}, server ${report.limits.serverCallsLastHour}/${report.limits.serverCallLimit}`,
     `Status: ${status}`,
-  ].join("\n");
+  ];
+  // Live activity is diagnostic-only information derived from the current
+  // snapshot, never part of the Name Record (ADR 0003).
+  if (report.liveActivity) lines.push(`Live activity (diagnostic only): ${report.liveActivity}`);
+  if (report.displayDiagnostic) {
+    lines.push(`Diagnostic: ${displayDiagnosticText(report.displayDiagnostic)}`);
+  }
+  return lines.join("\n");
 };
 
 const formatOutcome = (outcome: RuntimeOutcome, report: ExplainReport): string => {

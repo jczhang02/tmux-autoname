@@ -31,15 +31,18 @@ export const semanticEventSchema = z
 
 export type SemanticEvent = z.infer<typeof semanticEventSchema>;
 
+// ADR 0003: Scope is a Workspace only. Area (a cwd-derived subdirectory of
+// the Workspace) is no longer part of Scope or the Name Record.
 export type Scope = {
   workspace: string;
-  area?: string;
 };
 
+// ADR 0003: Activity is live information observed separately (see
+// `normalizeActivity` and `ExplainReport.liveActivity`), never part of the
+// durable Name Record.
 export type NameRecord = {
   scope: Scope;
   task: string;
-  activity: string;
 };
 
 export type TmuxPane = {
@@ -53,7 +56,10 @@ export type TmuxPane = {
   remoteHost?: string;
 };
 
+const CURRENT_PERSISTED_VERSION = 2;
+
 export type PersistedWindowState = {
+  version: typeof CURRENT_PERSISTED_VERSION;
   mode: "automatic" | "manual";
   revision: number;
   record?: NameRecord;
@@ -75,6 +81,27 @@ export type PersistedServerState = {
 };
 
 export const persistedWindowStateSchema: z.ZodType<PersistedWindowState> = z.object({
+  version: z.literal(CURRENT_PERSISTED_VERSION),
+  mode: z.enum(["automatic", "manual"]),
+  revision: z.number().int().nonnegative(),
+  record: z
+    .object({
+      scope: z.object({ workspace: z.string() }),
+      task: z.string(),
+    })
+    .optional(),
+  provenance: z.enum(["fallback", "ai"]).optional(),
+  accepted: z.boolean().optional(),
+  manualName: z.string().optional(),
+  lastAppliedName: z.string().optional(),
+  callTimes: z.array(z.number().int().nonnegative()).max(1000).optional(),
+  lastCallAt: z.number().int().nonnegative().optional(),
+});
+
+// Pre-ADR-0003 persisted shape: unversioned, Scope carried an optional Area
+// and NameRecord carried Activity. Kept only to drive the one-time upgrade
+// migration in `decodePersistedWindowState` below.
+const legacyPersistedWindowStateSchema = z.object({
   mode: z.enum(["automatic", "manual"]),
   revision: z.number().int().nonnegative(),
   record: z
@@ -98,6 +125,73 @@ export const persistedServerStateSchema: z.ZodType<PersistedServerState> = z.obj
   circuitOpenUntil: z.number().int().nonnegative().optional(),
 });
 
+/**
+ * Upgrade migration (ADR 0003). Decodes a persisted Window state written by
+ * either the current (versioned) schema or the pre-ADR-0003 legacy shape.
+ *
+ * A legacy record with a valid Task and AI provenance becomes accepted
+ * without a new AI request; its Workspace is retained, and Activity/Area
+ * are dropped since they no longer exist. Manual Names pass through
+ * untouched. A legacy Task that is not valid, even after the usual
+ * deterministic repair, is corrupt or of uncertain ownership: rather than
+ * guess at it, it is dropped, leaving the window to start fresh with a
+ * Workspace-only Provisional Name on the next automatic update -- it is
+ * never used to overwrite whatever name is currently visible. Completely
+ * unparseable state decodes to `undefined`, identical to no persisted state
+ * at all, for the same reason.
+ */
+export const decodePersistedWindowState = (raw: unknown): PersistedWindowState | undefined => {
+  const current = persistedWindowStateSchema.safeParse(raw);
+  if (current.success) return current.data;
+
+  const legacy = legacyPersistedWindowStateSchema.safeParse(raw);
+  if (!legacy.success) return undefined;
+  const state = legacy.data;
+
+  const carryOver = {
+    ...(state.manualName !== undefined ? { manualName: state.manualName } : {}),
+    ...(state.lastAppliedName !== undefined ? { lastAppliedName: state.lastAppliedName } : {}),
+    ...(state.callTimes ? { callTimes: state.callTimes } : {}),
+    ...(state.lastCallAt !== undefined ? { lastCallAt: state.lastCallAt } : {}),
+  };
+
+  if (!state.record) {
+    return {
+      version: CURRENT_PERSISTED_VERSION,
+      mode: state.mode,
+      revision: state.revision,
+      ...(state.provenance ? { provenance: state.provenance } : {}),
+      ...(state.accepted ? { accepted: state.accepted } : {}),
+      ...carryOver,
+    };
+  }
+
+  const task = normalizeTask(state.record.task);
+  const validTask = task.length > 0 && isValidTask(task);
+  if (!validTask && state.record.task !== "") {
+    // Corrupt or unrepairable legacy Task text: drop the record entirely
+    // rather than guess at it. This never overwrites a visible name -- it
+    // is treated exactly like no persisted record at all.
+    return {
+      version: CURRENT_PERSISTED_VERSION,
+      mode: state.mode,
+      revision: state.revision,
+      ...carryOver,
+    };
+  }
+
+  const becomesAccepted = (state.accepted ?? false) || (state.provenance === "ai" && validTask);
+  return {
+    version: CURRENT_PERSISTED_VERSION,
+    mode: state.mode,
+    revision: state.revision,
+    record: { scope: { workspace: state.record.scope.workspace }, task: validTask ? task : "" },
+    ...(state.provenance ? { provenance: state.provenance } : {}),
+    ...(becomesAccepted ? { accepted: true } : {}),
+    ...carryOver,
+  };
+};
+
 export type TmuxWindowSnapshot = {
   serverId: string;
   windowId: string;
@@ -115,16 +209,11 @@ export type TmuxWindowSnapshot = {
 export type ScopeCandidate = {
   id: string;
   value: string;
-  kind: "workspace" | "area";
-  workspaceId?: string;
   root?: string;
   facts: string[];
 };
 
-export type ScopeCandidates = {
-  workspaces: ScopeCandidate[];
-  areas: ScopeCandidate[];
-};
+export type ScopeCandidates = ScopeCandidate[];
 
 // ADR 0002 (D5): the model may propose a Task, ask to keep the previous one
 // (only meaningful on an explicit refresh), or abstain outright. Abstention
@@ -134,7 +223,6 @@ export const nameProposalSchema = z.discriminatedUnion("outcome", [
     .object({
       outcome: z.literal("propose"),
       workspaceId: z.string(),
-      areaId: z.string().nullable(),
       task: z.string(),
       confidence: z.number().min(0).max(1),
     })
@@ -213,13 +301,14 @@ const basename = (value: string): string => {
   return parts.at(-1) ?? "shell";
 };
 
-const relativeArea = (root: string, cwd: string): string | undefined => {
-  if (!root || !cwd || !isAbsolute(root) || !isAbsolute(cwd)) return undefined;
+// ADR 0002: Workspace selection prefers a root whose directory contains the
+// active pane's cwd (or equals it); this no longer feeds an Area, only the
+// containment check used to pick between candidate Workspace roots.
+const rootContains = (root: string, cwd: string): boolean => {
+  if (!root || !cwd || !isAbsolute(root) || !isAbsolute(cwd)) return false;
+  if (cleanPath(root) === cleanPath(cwd)) return true;
   const value = relative(cleanPath(root), cleanPath(cwd));
-  if (!value || value === "." || value.startsWith(`..${sep}`) || value === "..") {
-    return undefined;
-  }
-  return value.split(sep).join("/");
+  return value !== "" && !value.startsWith(`..${sep}`) && value !== "..";
 };
 
 const commonAncestor = (paths: string[]): string | undefined => {
@@ -241,17 +330,13 @@ export const buildScopeCandidates = (
   const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
   if (!active) {
     const workspace = snapshot.sessionName || "shell";
-    return {
-      workspaces: [
-        {
-          id: `workspace:${stableHash(workspace)}`,
-          value: workspace,
-          kind: "workspace",
-          facts: ["tmux session context"],
-        },
-      ],
-      areas: [],
-    };
+    return [
+      {
+        id: `workspace:${stableHash(workspace)}`,
+        value: workspace,
+        facts: ["tmux session context"],
+      },
+    ];
   }
 
   type WorkspaceRoot = { value: string; root: string | undefined; facts: string[] };
@@ -261,7 +346,7 @@ export const buildScopeCandidates = (
     sessionRoot &&
       snapshot.sessionName &&
       basename(sessionRoot) === snapshot.sessionName &&
-      (sessionRoot === cleanPath(active.cwd) || relativeArea(sessionRoot, active.cwd)),
+      rootContains(sessionRoot, active.cwd),
   );
   if (active.remoteHost) {
     roots.push({
@@ -329,62 +414,21 @@ export const buildScopeCandidates = (
     (candidate) => candidate.value,
   );
 
-  const workspaces = workspaceRoots.map((candidate) => ({
+  return workspaceRoots.map((candidate) => ({
     id: `workspace:${stableHash(candidate)}`,
     value: candidate.value,
-    kind: "workspace" as const,
     ...(candidate.root ? { root: candidate.root } : {}),
     facts: candidate.facts,
   }));
-
-  const areaCandidates: ScopeCandidate[] = [];
-  for (const [index, candidate] of workspaceRoots.entries()) {
-    const value = candidate.root ? relativeArea(candidate.root, active.cwd) : undefined;
-    if (!value) continue;
-    areaCandidates.push({
-      id: `area:${stableHash({ root: candidate.root, value })}`,
-      value,
-      kind: "area",
-      workspaceId: workspaces[index]!.id,
-      root: candidate.root,
-      facts: [`active cwd relative to ${candidate.value}`],
-    });
-  }
-  const areas = [...areaCandidates.reduce((merged, candidate) => {
-    const key = `${candidate.workspaceId ?? ""}\0${candidate.value}`;
-    const existing = merged.get(key);
-    if (existing) {
-      existing.facts = [...new Set([...existing.facts, ...candidate.facts])];
-    } else {
-      merged.set(key, candidate);
-    }
-    return merged;
-  }, new Map<string, ScopeCandidate>()).values()];
-
-  return { workspaces, areas };
 };
 
 export const deterministicScope = (candidates: ScopeCandidates): Scope => {
-  const workspace = candidates.workspaces[0];
-  if (!workspace) return { workspace: "shell" };
-  const area = candidates.areas.find((candidate) => candidate.workspaceId === workspace.id);
-  return area
-    ? { workspace: workspace.value, area: area.value }
-    : { workspace: workspace.value };
+  const workspace = candidates[0];
+  return workspace ? { workspace: workspace.value } : { workspace: "shell" };
 };
 
-export const isGroundedScope = (scope: Scope, candidates: ScopeCandidates): boolean => {
-  const workspaces = candidates.workspaces.filter(
-    (candidate) => candidate.value === scope.workspace,
-  );
-  if (workspaces.length === 0) return false;
-  if (!scope.area) return true;
-  return workspaces.some((workspace) =>
-    candidates.areas.some(
-      (area) => area.workspaceId === workspace.id && area.value === scope.area,
-    )
-  );
-};
+export const isGroundedScope = (scope: Scope, candidates: ScopeCandidates): boolean =>
+  candidates.some((candidate) => candidate.value === scope.workspace);
 
 export const normalizeActivity = (command: string): string => {
   const value = command.trim().split("/").at(-1)?.toLowerCase() ?? "shell";
@@ -401,20 +445,44 @@ export const normalizeActivity = (command: string): string => {
   return aliases[normalized] ?? (normalized.replace(/[^a-z0-9._+-]/g, "") || "shell");
 };
 
+// ADR 0003: the default display is Workspace/Task, with no Activity and no
+// Area. `OLD_DEFAULT_DISPLAY_PROFILE` is kept only to recognize an
+// unedited pre-upgrade default during migration (see
+// `resolveDisplayProfile`).
+export const DEFAULT_DISPLAY_PROFILE = "{scope}/{task}";
+export const OLD_DEFAULT_DISPLAY_PROFILE = "{activity}:{scope}/{task}";
+
+export type DisplayProfileDiagnostic = "display_profile_activity_unsupported";
+
+export type DisplayProfileResolution = {
+  profile: string;
+  diagnostic?: DisplayProfileDiagnostic;
+};
+
+// D6: a custom display template containing {activity} is not silently
+// rewritten or dropped -- it gets an actionable diagnostic and renders with
+// the new default profile until the user fixes the template. A profile
+// left exactly at the old built-in default (never customized by the user)
+// migrates silently to the new default instead, since that is a stale
+// literal rather than an intentional customization.
+export const resolveDisplayProfile = (profile: string): DisplayProfileResolution => {
+  if (profile === OLD_DEFAULT_DISPLAY_PROFILE) return { profile: DEFAULT_DISPLAY_PROFILE };
+  if (/\{activity\}/u.test(profile)) {
+    return { profile: DEFAULT_DISPLAY_PROFILE, diagnostic: "display_profile_activity_unsupported" };
+  }
+  return { profile };
+};
+
 export const renderName = (
   record: NameRecord,
-  profile = "{activity}:{scope}/{task}",
+  profile = DEFAULT_DISPLAY_PROFILE,
 ): string => {
-  const scope = record.scope.area
-    ? `${record.scope.workspace}/${record.scope.area}`
-    : record.scope.workspace;
   const values: Record<string, string> = {
-    activity: record.activity,
-    scope,
+    scope: record.scope.workspace,
     task: record.task,
   };
   const rendered = profile.replace(
-    /\{(activity|scope|task)\}/g,
+    /\{(scope|task)\}/g,
     (_match, key: keyof typeof values) => values[key] ?? "",
   );
   return rendered
@@ -491,8 +559,8 @@ export type ProposalResolution =
 // outcomes. "kept" is only meaningful on an explicit refresh with a
 // previous Task to keep (D5); anything else -- a bare "keep" with nothing
 // to keep, a "keep" returned for a non-refresh (automatic) trigger, a
-// below-threshold proposal, an ungrounded workspace/area id, or a task slug
-// that is still refusal-shaped after deterministic repair -- resolves to
+// below-threshold proposal, an ungrounded workspace id, or a task slug that
+// is still refusal-shaped after deterministic repair -- resolves to
 // abstention rather than an error, per D5/D7.
 export const resolveProposal = (
   proposal: NameProposal,
@@ -507,18 +575,8 @@ export const resolveProposal = (
   }
 
   if (proposal.confidence < confidenceThreshold) return { kind: "abstained" };
-  const workspace = request.candidates.workspaces.find(
-    (candidate) => candidate.id === proposal.workspaceId,
-  );
-  const area = proposal.areaId
-    ? request.candidates.areas.find((candidate) => candidate.id === proposal.areaId)
-    : undefined;
-  if (
-    !workspace ||
-    (proposal.areaId !== null && (!area || area.workspaceId !== workspace.id))
-  ) {
-    return { kind: "abstained" };
-  }
+  const workspace = request.candidates.find((candidate) => candidate.id === proposal.workspaceId);
+  if (!workspace) return { kind: "abstained" };
 
   // D7: repair deterministic formatting slips before validation; a slug
   // that is still refusal-shaped (or empty) after repair is abstention.
@@ -528,11 +586,8 @@ export const resolveProposal = (
   return {
     kind: "accepted",
     record: {
-      scope: area
-        ? { workspace: workspace.value, area: area.value }
-        : { workspace: workspace.value },
+      scope: { workspace: workspace.value },
       task,
-      activity: request.activity,
     },
   };
 };
@@ -568,8 +623,6 @@ const stableTerminalEvidence = (value: string): string[] => [
       .filter((line) => !/^(?:~|\/|\.\.?\/)\S*(?:\s+.*\d){2}/u.test(line)),
   ),
 ].slice(-24);
-
-export const scopeKey = (scope: Scope): string => `${scope.workspace}\0${scope.area ?? ""}`;
 
 export const isMeaningfulCommand = (commandName: string | undefined): boolean => {
   if (!commandName) return false;

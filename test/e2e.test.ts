@@ -91,7 +91,6 @@ describe.serial("compiled isolated tmux E2E", () => {
       if (mode === "gated") await gate.promise;
       const serialized = JSON.stringify(body);
       const workspaceId = serialized.match(/workspace:[a-f0-9]{20}/u)?.[0];
-      const areaId = serialized.match(/area:[a-f0-9]{20}/u)?.[0] ?? null;
       if (!workspaceId) return Response.json({ error: { message: "bad evidence" } }, { status: 400 });
       return Response.json({
         id: "chatcmpl-e2e",
@@ -106,7 +105,6 @@ describe.serial("compiled isolated tmux E2E", () => {
               content: JSON.stringify({
                 outcome: "propose",
                 workspaceId,
-                areaId,
                 task,
                 confidence: 0.95,
               }),
@@ -133,6 +131,8 @@ describe.serial("compiled isolated tmux E2E", () => {
         circuitOpenUntil?: number;
       };
       record?: { task: string };
+      liveActivity?: string;
+      displayDiagnostic?: string;
     };
   };
   const name = async () =>
@@ -250,7 +250,7 @@ circuit_cooldown_ms = 500
       )
     ).stdout.trim();
     [windowId, paneId] = created.split(":") as [string, string];
-    await waitFor(name, (value) => value === "zsh:partjobs/high-value-patent-rebuild/manuscript");
+    await waitFor(name, (value) => value === "partjobs");
 
     // ADR 0002 (D2): automatic evidence capture requires the window to be
     // the current window of at least one attached client. This session is
@@ -307,7 +307,7 @@ circuit_cooldown_ms = 500
     await waitFor(
       async () => (await tmux("display-message", "-p", "-t", hookedWindow, "#{window_name}"))
         .stdout.trim(),
-      (value) => value === "zsh:partjobs",
+      (value) => value === "partjobs",
     );
     await tmux("kill-window", "-t", hookedWindow);
     expect(
@@ -331,12 +331,15 @@ circuit_cooldown_ms = 500
     expect(authorizations[0]).toBe(`Bearer ${TEST_SECRET}`);
   }, 10000);
 
-  test("Activity changes locally and an inactive pane cannot rename the window", async () => {
+  // ADR 0003: Activity is live information, observable only through
+  // `explain`, and never part of the Name Record or the displayed name.
+  test("Activity is tracked locally through `explain` only, never in the display, and an inactive pane's Activity is never observed", async () => {
     const fakeNvim = join(testRoot, "nvim");
     const fakePytest = join(testRoot, "pytest");
     await symlink("/usr/bin/sleep", fakeNvim);
     await symlink("/usr/bin/sleep", fakePytest);
     const beforeCalls = requests.length;
+    const beforeName = await name();
 
     await tmux("send-keys", "-t", paneId, "C-u");
     await tmux("send-keys", "-t", paneId, `${fakeNvim} 30`, "Enter");
@@ -346,14 +349,19 @@ circuit_cooldown_ms = 500
       (value) => value === "nvim",
     );
     await run([join(process.cwd(), "dist/tmux-autoname"), "emit", "--source", "tmux", "--kind", "window_changed", "--window", windowId], { env });
-    await waitFor(name, (value) => value.startsWith("nvim:"));
+    await waitFor(explain, (value) => value.liveActivity === "nvim");
+    expect(await name()).toBe(beforeName);
+    expect(requests).toHaveLength(beforeCalls);
 
     const inactive = (
       await tmux("split-window", "-dP", "-F", "#{pane_id}", "-t", windowId, fakePytest, "30")
     ).stdout.trim();
     await run([join(process.cwd(), "dist/tmux-autoname"), "emit", "--source", "tmux", "--kind", "window_changed", "--window", windowId], { env });
     await Bun.sleep(100);
-    expect(await name()).toStartWith("nvim:");
+    // ADR 0002 (D2): only the active pane's evidence is observed, so the
+    // inactive pytest pane must not change the reported Activity.
+    expect((await explain()).liveActivity).toBe("nvim");
+    expect(await name()).toBe(beforeName);
     expect(requests).toHaveLength(beforeCalls);
     await tmux("kill-pane", "-t", inactive);
     await tmux("send-keys", "-t", paneId, "C-c");
@@ -400,7 +408,7 @@ circuit_cooldown_ms = 500
     await cdPane(paneId, sibling);
     await emitEvent("window_changed", { windowId, paneId });
     await Bun.sleep(100);
-    expect(await name()).toContain("partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin");
+    expect(await name()).toContain("partjobs/redesign-naming-plugin");
     expect(requests).toHaveLength(beforeCalls);
 
     // A genuine cross-Workspace move must not touch it either: Workspace
@@ -410,7 +418,7 @@ circuit_cooldown_ms = 500
     await cdPane(paneId, otherWorkspace);
     await emitEvent("window_changed", { windowId, paneId });
     await Bun.sleep(100);
-    expect(await name()).toContain("partjobs/high-value-patent-rebuild/manuscript/redesign-naming-plugin");
+    expect(await name()).toContain("partjobs/redesign-naming-plugin");
     expect(requests).toHaveLength(beforeCalls);
 
     await cdPane(paneId, nested);
@@ -446,7 +454,7 @@ circuit_cooldown_ms = 500
       JSON.parse((await cli("explain", "--window", id, "--json")).stdout) as {
         mode: string;
       };
-    await waitFor(() => nameOf(newWindowId), (value) => value === "zsh:partjobs/high-value-patent-rebuild/manuscript");
+    await waitFor(() => nameOf(newWindowId), (value) => value === "partjobs");
     await tmux("select-window", "-t", newWindowId);
 
     const beforeAccept = requests.length;
@@ -472,7 +480,7 @@ circuit_cooldown_ms = 500
     const beforeNew = requests.length;
     const started = await cli("new", "--window", newWindowId);
     expect(started.stdout).toContain("new work →");
-    await waitFor(() => nameOf(newWindowId), (value) => value === "zsh:partjobs");
+    await waitFor(() => nameOf(newWindowId), (value) => value === "partjobs");
     expect(requests).toHaveLength(beforeNew);
 
     // D1: residual (unchanged) evidence must not retrigger inference.

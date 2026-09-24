@@ -27,7 +27,6 @@ soak(
         const serialized = JSON.stringify(body);
         requests.push(Buffer.byteLength(serialized));
         const workspaceId = serialized.match(/workspace:[a-f0-9]{20}/u)?.[0];
-        const areaId = serialized.match(/area:[a-f0-9]{20}/u)?.[0] ?? null;
         if (!workspaceId) return Response.json({ error: "missing candidate" }, { status: 400 });
         return Response.json({
           id: "chatcmpl-soak",
@@ -42,7 +41,6 @@ soak(
                 content: JSON.stringify({
                   outcome: "propose",
                   workspaceId,
-                  areaId,
                   task: "maintain-soak-window",
                   confidence: 0.95,
                 }),

@@ -9,10 +9,11 @@ import {
   normalizeActivity,
   normalizeTask,
   renderName,
+  resolveDisplayProfile,
   resolveProposal,
-  scopeKey,
   type BadgeState,
   type BadgeStyle,
+  type DisplayProfileDiagnostic,
   type NameProposal,
   type NameRecord,
   type NameRequest,
@@ -22,6 +23,8 @@ import {
   type TmuxPane,
   type TmuxWindowSnapshot,
 } from "./domain";
+
+const CURRENT_PERSISTED_VERSION = 2 as const;
 
 export type TmuxTarget = { windowId?: string; paneId?: string };
 
@@ -76,12 +79,15 @@ export class ProviderAuthenticationError extends Error {
 
 type RuntimeWindowState = PersistedWindowState & {
   fingerprint?: string;
-  lastLocalScope?: string;
-  // ADR 0002: only Workspace-level changes are a trigger; subdirectory
-  // (Area) changes within the same Workspace never are. Tracked separately
-  // from lastLocalScope, which also covers Area for provisional rendering.
+  // ADR 0002: only Workspace-level changes are a trigger before a Task is
+  // accepted; subdirectory changes within a Workspace never are (Scope has
+  // no Area to track separately -- see ADR 0003).
   lastLocalWorkspace?: string;
   lastProfile: string;
+  // D6: set when `lastProfile` above is a fallback because the configured
+  // template contains {activity}; surfaced in `explain` and the diagnostic
+  // log, and re-evaluated (and re-logged on change) on every snapshot.
+  displayDiagnostic?: DisplayProfileDiagnostic;
   badgeStyle: BadgeStyle;
   badgeState: BadgeState;
   badgeSynced: boolean;
@@ -112,6 +118,10 @@ export type ExplainReport = {
   badge: { state: BadgeState; text: string; style: BadgeStyle };
   fingerprint?: string;
   lastError?: string;
+  // Live information derived from the current snapshot's active pane, never
+  // part of the Name Record (ADR 0003); diagnostic only.
+  liveActivity?: string;
+  displayDiagnostic?: DisplayProfileDiagnostic;
   limits: {
     windowCallsLastHour: number;
     windowCallLimit: number;
@@ -143,16 +153,22 @@ export class AutonameRuntime {
   // circuit protections still apply on top of this.
   #authPausedReason: string | undefined;
 
+  // D6: notified once per transition into (or a changed) display-profile
+  // diagnostic, so the daemon can also write it to the diagnostic log.
+  readonly #onDiagnostic: ((code: DisplayProfileDiagnostic) => void) | undefined;
+
   constructor(options: {
     tmux: TmuxPort;
     model?: ModelPort;
     clock?: ClockPort;
     config: AppConfig;
+    onDiagnostic?: (code: DisplayProfileDiagnostic) => void;
   }) {
     this.#tmux = options.tmux;
     this.#model = options.model;
     this.#clock = options.clock ?? new RealClock();
     this.#config = options.config;
+    this.#onDiagnostic = options.onDiagnostic;
   }
 
   async handle(event: SemanticEvent): Promise<RuntimeOutcome> {
@@ -193,6 +209,7 @@ export class AutonameRuntime {
     const snapshot = await this.#tmux.snapshot(target);
     const state = await this.#stateFor(snapshot);
     this.#pruneCalls(state, this.#clock.now());
+    const active = snapshot.panes.find((pane) => pane.active) ?? snapshot.panes[0];
     const report: ExplainReport = {
       windowId: snapshot.windowId,
       mode: state.mode,
@@ -216,6 +233,8 @@ export class AutonameRuntime {
       ...(state.manualName ? { manualName: state.manualName } : {}),
       ...(state.fingerprint ? { fingerprint: state.fingerprint } : {}),
       ...(state.lastError ? { lastError: state.lastError } : {}),
+      ...(active ? { liveActivity: normalizeActivity(active.command) } : {}),
+      ...(state.displayDiagnostic ? { displayDiagnostic: state.displayDiagnostic } : {}),
     };
     return report;
   }
@@ -285,7 +304,14 @@ export class AutonameRuntime {
     snapshot: TmuxWindowSnapshot,
     state: RuntimeWindowState,
   ): Promise<void> {
-    state.lastProfile = snapshot.displayProfile ?? this.#config.display.profile;
+    const resolved = resolveDisplayProfile(snapshot.displayProfile ?? this.#config.display.profile);
+    state.lastProfile = resolved.profile;
+    // D6: log a diagnostic only on a transition (new diagnostic, cleared
+    // diagnostic, or a change to a different one), never on every event.
+    if (resolved.diagnostic !== state.displayDiagnostic) {
+      state.displayDiagnostic = resolved.diagnostic;
+      if (resolved.diagnostic) this.#onDiagnostic?.(resolved.diagnostic);
+    }
     state.badgeStyle = snapshot.badgeStyle ?? state.badgeStyle;
     if (!state.badgeSynced) {
       state.badgeSynced = true;
@@ -294,15 +320,18 @@ export class AutonameRuntime {
   }
 
   /**
-   * Keeps the local (non-AI) Name Record in sync with deterministic Scope
-   * and Activity, applying or re-rendering it as needed. Returns whether
-   * the local Workspace changed and the current Activity, both needed to
-   * decide whether an inference attempt is justified.
+   * Keeps the local (non-AI) Name Record's Scope in sync and its rendered
+   * display current, applying or re-rendering it as needed. Returns
+   * whether the local Workspace changed and the current (live) Activity,
+   * both needed to decide whether an inference attempt is justified.
+   * Activity itself is never stored in the Name Record (ADR 0003); it is
+   * only threaded through as evidence for a possible model request.
    *
    * ADR 0001: once a Task is accepted, its Scope and Task are frozen --
-   * automation may never replace them again, regardless of Workspace,
-   * cwd, or activity changes. Only Activity, which is live information and
-   * not part of the Name Record's durable identity, keeps re-rendering.
+   * automation may never replace them again, regardless of Workspace or
+   * cwd changes. The record can still be re-rendered (e.g. a changed
+   * display profile, or the one-time upgrade migration to the new default
+   * format), just never reassigned.
    */
   async #updateLocalRecord(
     snapshot: TmuxWindowSnapshot,
@@ -313,45 +342,47 @@ export class AutonameRuntime {
     const activity = normalizeActivity(active.command);
 
     if (state.accepted) {
-      if (state.record && state.record.activity !== activity) {
-        state.record = { ...state.record, activity };
-        if (state.mode === "automatic") await this.#applyRecord(snapshot, state);
-        else await this.#save(snapshot.windowId, state);
-      }
+      await this.#reapplyIfStale(snapshot, state);
       return { workspaceChanged: false, activity };
     }
 
     const localScope = deterministicScope(candidates);
-    const localScopeKey = scopeKey(localScope);
-    const scopeChanged =
-      state.lastLocalScope !== undefined && state.lastLocalScope !== localScopeKey;
-    // ADR 0002: subdirectory (Area) changes within the same Workspace never
+    // ADR 0002: subdirectory changes within the same Workspace never
     // justify an inference attempt; only a Workspace-level change does.
     const workspaceChanged =
       state.lastLocalWorkspace !== undefined && state.lastLocalWorkspace !== localScope.workspace;
-    state.lastLocalScope = localScopeKey;
     state.lastLocalWorkspace = localScope.workspace;
-    const activityChanged = state.record?.activity !== activity;
     const firstRecord = state.record === undefined;
 
-    if (firstRecord || scopeChanged || activityChanged) {
+    if (firstRecord || workspaceChanged) {
       state.revision += 1;
       state.record = {
-        scope: firstRecord || scopeChanged ? localScope : state.record?.scope ?? localScope,
-        task: scopeChanged ? "" : state.record?.task ?? "",
-        activity,
+        scope: localScope,
+        task: workspaceChanged ? "" : state.record?.task ?? "",
       };
-      if (firstRecord || scopeChanged) state.provenance = "fallback";
+      state.provenance = "fallback";
       if (state.mode === "automatic") await this.#applyRecord(snapshot, state);
       else await this.#save(snapshot.windowId, state);
     } else {
-      const rendered = state.record ? renderName(state.record, state.lastProfile) : "";
-      if (rendered && rendered !== state.lastAppliedName && state.mode === "automatic") {
-        await this.#applyRecord(snapshot, state);
-      }
+      await this.#reapplyIfStale(snapshot, state);
     }
 
     return { workspaceChanged, activity };
+  }
+
+  /**
+   * Re-renders and applies the current record when its rendering no longer
+   * matches what was last applied (a changed display profile, or -- for an
+   * already-accepted record loaded from a pre-ADR-0003 persisted state --
+   * the one-time migration to the new default format). A no-op once the
+   * live tmux window name already matches.
+   */
+  async #reapplyIfStale(snapshot: TmuxWindowSnapshot, state: RuntimeWindowState): Promise<void> {
+    if (!state.record || state.mode !== "automatic") return;
+    const rendered = renderName(state.record, state.lastProfile);
+    if (rendered && rendered !== state.lastAppliedName) {
+      await this.#applyRecord(snapshot, state);
+    }
   }
 
   /** Pure trigger decision: does this event justify an inference attempt, and is it forced (bypasses the minimum call interval)? */
@@ -420,9 +451,7 @@ export class AutonameRuntime {
     state.record = {
       scope: { workspace: localScope.workspace },
       task: "",
-      activity: normalizeActivity(active?.command ?? ""),
     };
-    state.lastLocalScope = scopeKey(localScope);
     state.lastLocalWorkspace = localScope.workspace;
     state.fingerprint = evidenceFingerprint(snapshot, candidates, terminalContext);
     state.lastError = undefined;
@@ -731,7 +760,11 @@ export class AutonameRuntime {
     const persistedRecord = persisted?.record;
     const ungrounded =
       !accepted && persistedRecord !== undefined && !isGroundedScope(persistedRecord.scope, candidates);
+    const resolvedProfile = resolveDisplayProfile(
+      snapshot.displayProfile ?? this.#config.display.profile,
+    );
     const state: RuntimeWindowState = {
+      version: CURRENT_PERSISTED_VERSION,
       mode: persisted?.mode ?? "automatic",
       revision: persisted?.revision ?? 0,
       ...(persisted?.record
@@ -741,9 +774,9 @@ export class AutonameRuntime {
       accepted,
       ...(persisted?.manualName ? { manualName: persisted.manualName } : {}),
       ...(persisted?.lastAppliedName ? { lastAppliedName: persisted.lastAppliedName } : {}),
-      lastLocalScope: scopeKey(ungrounded ? persistedRecord!.scope : localScope),
       lastLocalWorkspace: ungrounded ? persistedRecord!.scope.workspace : localScope.workspace,
-      lastProfile: snapshot.displayProfile ?? this.#config.display.profile,
+      lastProfile: resolvedProfile.profile,
+      ...(resolvedProfile.diagnostic ? { displayDiagnostic: resolvedProfile.diagnostic } : {}),
       badgeStyle: snapshot.badgeStyle ?? "plain",
       badgeState: persisted?.mode === "manual" ? "manual" : "healthy",
       badgeSynced: false,
@@ -834,6 +867,7 @@ export class AutonameRuntime {
 
   async #save(windowId: string, state: RuntimeWindowState): Promise<void> {
     const persisted: PersistedWindowState = {
+      version: CURRENT_PERSISTED_VERSION,
       mode: state.mode,
       revision: state.revision,
       ...(state.record ? { record: state.record } : {}),

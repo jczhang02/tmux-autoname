@@ -7,9 +7,9 @@ import { generateText, type LanguageModel } from "ai";
 import type { AppConfig, CredentialReference } from "./config";
 import { credentialCommand } from "./config";
 import {
+  decodePersistedWindowState,
   nameProposalSchema,
   persistedServerStateSchema,
-  persistedWindowStateSchema,
   type NameProposal,
   type NameRequest,
   type PersistedWindowState,
@@ -192,10 +192,9 @@ const modelPrompt = (request: NameRequest): string => {
   };
   return `Name the current tmux work. Return one JSON object and no Markdown.
 The object has an "outcome" field, exactly one of "propose", "keep", or "abstain":
-- {"outcome":"propose","workspaceId":...,"areaId":...,"task":...,"confidence":...}
+- {"outcome":"propose","workspaceId":...,"task":...,"confidence":...}
   Use when the evidence supports a concrete work goal.
   - workspaceId: selected only from the workspace candidates.
-  - areaId: selected only when that area's workspaceId equals the selected workspaceId; otherwise null.
   - task: a concrete 2-5 word lower-case English action slug joined with hyphens describing the
     broad work goal, not the current step, prompt, or output.
   - confidence: a number from 0 to 1.
@@ -520,7 +519,7 @@ const decodeState = (encoded: string | undefined): PersistedWindowState | undefi
   if (!encoded) return undefined;
   try {
     const parsed: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    return persistedWindowStateSchema.parse(parsed);
+    return decodePersistedWindowState(parsed);
   } catch {
     return undefined;
   }

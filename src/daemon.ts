@@ -229,6 +229,7 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
     runtime = new AutonameRuntime({
       tmux,
       config,
+      onDiagnostic: (code) => void logDiagnostic(paths.log, code),
       ...(config.ai ? { model: new AiSdkModel(config.ai) } : {}),
     });
   } catch (error) {

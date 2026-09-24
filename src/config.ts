@@ -1,7 +1,7 @@
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { BadgeStyle } from "./domain";
+import { DEFAULT_DISPLAY_PROFILE, type BadgeStyle } from "./domain";
 
 const credentialSchema = z.discriminatedUnion("source", [
   z.object({ source: z.literal("onepassword"), ref: z.string().startsWith("op://") }).strict(),
@@ -58,8 +58,8 @@ const aiSchema = z
 const configSchema = z.object({
   ai: aiSchema.optional(),
   display: z
-    .object({ profile: z.string().min(1).default("{activity}:{scope}/{task}") }).strict()
-    .default({ profile: "{activity}:{scope}/{task}" }),
+    .object({ profile: z.string().min(1).default(DEFAULT_DISPLAY_PROFILE) }).strict()
+    .default({ profile: DEFAULT_DISPLAY_PROFILE }),
   limits: z
     .object({
       debounce_ms: z.number().int().nonnegative().default(1000),

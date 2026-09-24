@@ -172,8 +172,7 @@ export const proposalFor = (
   task = "redesign naming plugin",
 ): NameProposal => ({
   outcome: "propose",
-  workspaceId: request.candidates.workspaces[0]!.id,
-  areaId: request.candidates.areas[0]?.id ?? null,
+  workspaceId: request.candidates[0]!.id,
   task,
   confidence: 0.95,
 });

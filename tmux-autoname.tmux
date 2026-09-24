@@ -15,8 +15,16 @@ fi
 if [ -z "$(tmux show-option -gqv @tmux-autoname-install-badge)" ]; then
   tmux set-option -gq @tmux-autoname-install-badge on
 fi
-if [ -z "$(tmux show-option -gqv @tmux-autoname-profile)" ]; then
-  tmux set-option -gq @tmux-autoname-profile '{activity}:{scope}/{task}'
+# ADR 0003: the default display format is Workspace/Task, with no Activity
+# and no Area. Seed the new default when unset, and migrate a value still
+# sitting at the old unedited default (never seed over a genuine user
+# customization, even one that happens to contain {activity}: the daemon
+# itself diagnoses and falls back for that case).
+current_profile=$(tmux show-option -gqv @tmux-autoname-profile)
+if [ -z "$current_profile" ]; then
+  tmux set-option -gq @tmux-autoname-profile '{scope}/{task}'
+elif [ "$current_profile" = '{activity}:{scope}/{task}' ]; then
+  tmux set-option -gq @tmux-autoname-profile '{scope}/{task}'
 fi
 
 if [ "$(tmux show-option -gqv @tmux-autoname-install-badge)" != off ]; then

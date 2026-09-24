@@ -11,7 +11,7 @@ source = "env"
 name = "OPENAI_API_KEY"
 
 [display]
-profile = "{activity}:{scope}/{task}"
+profile = "{scope}/{task}"
 
 [limits]
 debounce_ms = 1000
