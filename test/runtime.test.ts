@@ -534,6 +534,30 @@ describe("AutonameRuntime interface", () => {
     expect(report.displayDiagnostic).toBe("display_profile_activity_unsupported");
   });
 
+  // D6: the diagnostic log must actually receive the diagnostic the very
+  // first time a window is observed with a bad template, not only on a
+  // later change -- `onDiagnostic` must not depend on the window state
+  // having pre-existed without the diagnostic.
+  test("D6: onDiagnostic fires once for a window whose very first observed state already has a bad template", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    tmux.setProfile("@1", "{activity}::{scope}/{task}");
+    const model = new FakeModel();
+    const diagnostics: string[] = [];
+    const runtime = new AutonameRuntime({
+      tmux,
+      model,
+      config: config(),
+      onDiagnostic: (code) => diagnostics.push(code),
+    });
+
+    await runtime.handle(event("window_changed"));
+    expect(diagnostics).toEqual(["display_profile_activity_unsupported"]);
+
+    await runtime.handle(event("window_changed"));
+    expect(diagnostics).toEqual(["display_profile_activity_unsupported"]);
+  });
+
   // ADR 0003: a profile left exactly at the old built-in default (never
   // customized by the user) migrates silently to the new default -- no
   // diagnostic, since it is a stale literal rather than an intentional

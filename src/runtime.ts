@@ -785,6 +785,12 @@ export class AutonameRuntime {
       ...(persisted?.lastCallAt !== undefined ? { lastCallAt: persisted.lastCallAt } : {}),
     };
     this.#states.set(snapshot.windowId, state);
+    // D6: a brand-new window state's initial diagnostic (if any) is itself
+    // a transition into that diagnostic -- `#primeSnapshotState`'s
+    // change-detection would otherwise never fire for it, since it
+    // compares against this same value. Notify here so the very first
+    // window observed with a bad template is logged, not just later ones.
+    if (resolvedProfile.diagnostic) this.#onDiagnostic?.(resolvedProfile.diagnostic);
     return state;
   }
 
