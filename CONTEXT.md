@@ -1,32 +1,31 @@
 # Window Naming
 
-This context describes the semantic information used to name tmux windows. A name identifies where work belongs, why it is being done, and how it is currently being performed without tying those meanings to one display habit.
+This glossary describes stable work labels for tmux windows. A work label identifies where work belongs and the goal assigned to the Window; current Activity is separate observational information. Decisions behind this language are recorded in `docs/adr/`.
 
 ## Language
 
 **Name Record**:
-The structured meaning of an accepted automatic window name, composed of Scope, Task, and Activity. It is independent of how the name is displayed. A local name without an accepted Task is a Provisional Name, not a complete Name Record.
+The durable meaning of a Window's accepted automatic name, composed of Scope and Task and independent of its display. An accepted Name Record is informally called the Window's work label. A local name without an accepted Task is a Provisional Name, not a complete Name Record.
 _Avoid_: Title, generated string
 
 **Scope**:
-The meaningful location to which work belongs, composed of a Workspace and an optional Area. A Scope is not assumed to be the tmux Session or raw current directory.
-_Avoid_: Session name, cwd
+The Workspace to which a Window's assigned work belongs. It is distinct from the current directory or tmux Session and need not change when either changes. Subdirectories within a Workspace are not part of Scope.
+_Avoid_: Session name, cwd, Area, subdirectory
 
 **Workspace**:
-A stable project, worktree, remote environment, or other root that gives work its identity.
+A stable project, worktree, remote environment, or other root that gives work its identity; informally, the project. Its name keeps its original spelling.
 _Avoid_: Repository, session
 
-**Area**:
-A meaningful sublocation within a Workspace, such as `code`, `manuscript`, or `docs`.
-_Avoid_: Subdirectory, path suffix
-
 **Task**:
-The stable user goal currently being pursued within a Scope. A Task describes intent rather than the latest command, output, or tool.
-It is stored as two to five lower-case English words joined by hyphens.
-_Avoid_: Command, prompt, activity
+The stable work goal assigned to a Window, broad enough to span investigation, design, implementation, and validation. It describes the Window's purpose rather than its latest command, prompt, output, or active tool. It is written as two to five lower-case English words joined by hyphens.
+_Avoid_: Command, prompt, activity, current step
+
+**Window**:
+The tmux container to which a work label belongs, potentially including several panes contributing to the same goal. Its work identity is distinct from the focused pane or the lifetime of any one process.
+_Avoid_: Pane, agent session
 
 **Activity**:
-The tool or foreground work mechanism currently used to pursue a Task, such as `codex`, `nvim`, `pytest`, or `ssh`.
+The currently observed tool or foreground work mechanism, such as `codex`, `nvim`, `pytest`, or `ssh`. Activity is live information derived from Evidence, not part of the Name Record.
 _Avoid_: Task, process tree
 
 **Session**:
@@ -34,7 +33,7 @@ A tmux collection of windows that provides organizational context. A Session may
 _Avoid_: Project, workspace
 
 **Display Profile**:
-A rule that projects a Name Record into a visible window name. Changing the Display Profile does not change Scope, Task, or Activity.
+A rule that projects a Name Record into a visible window name. Presentation is distinct from the underlying Scope and Task.
 _Avoid_: Naming algorithm, task format
 
 **Automatic Name**:
@@ -42,12 +41,20 @@ A visible window name produced from a Name Record through a Display Profile.
 _Avoid_: AI name
 
 **Provisional Name**:
-A useful local window name rendered from Scope and Activity while no accepted Task is available. It remains usable during startup and AI failure but does not claim to be a complete Name Record.
+A Workspace-only window name shown while no Task is accepted. It is a valid name, even indefinitely, when the available Evidence does not establish a work goal.
 _Avoid_: Fallback record, empty Task
 
 **Manual Name**:
 A user-authored window name that takes precedence over an Automatic Name until automatic naming is explicitly restored.
 _Avoid_: Locked automatic name
+
+**Re-identification**:
+An explicit request (`tmux-autoname refresh`) to reconsider a Window's assigned work using current Evidence while retaining its accepted work label unless a replacement is accepted.
+_Avoid_: Reset, new work
+
+**New Work**:
+An explicit end (`tmux-autoname new`) to a Window's previous work assignment, leaving it with a Provisional Name while a new goal is established.
+_Avoid_: Reset, refresh, re-identification, restore automation
 
 **Evidence**:
 Observed information from which Scope, Task, or Activity may be inferred. Evidence is not itself part of the Name Record.
