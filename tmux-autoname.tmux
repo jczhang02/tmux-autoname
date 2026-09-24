@@ -82,8 +82,13 @@ done
 #
 # pane-title-changed filters in tmux itself: the glyph-stripped title is
 # compared against a per-pane marker with if-shell -F (no fork) and
-# run-shell only spawns when it actually changed.
-glyph_fmt='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:pane_title}'
+# run-shell only spawns when it actually changed. Stripping codex's
+# trailing " | <project>" here too, the same as GLYPH_FMT in
+# bin/tmux-autoname, keeps this filter and normalize_title() in agreement:
+# a spinner-only change never fires the hook, but any change to the actual
+# title (spinner appearing, disappearing, or the text itself changing)
+# always does, so a stale spinner can't get stuck in the window name.
+glyph_fmt='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:#{s/ \| [^|]*$//:pane_title}}'
 sync_pane_cmd="run-shell -b \\\"'${bin_q}' sync -t '#{pane_id}'\\\""
 tmux set-hook -g 'pane-title-changed[120]' \
   "if-shell -F '#{!=:${glyph_fmt},#{@tmux-autoname-seen}}' \"${sync_pane_cmd}\""

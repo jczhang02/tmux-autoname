@@ -4,9 +4,11 @@
 set -eu
 
 # Glyph-stripping format, shared with the pane-title-changed hook in
-# tmux-autoname.tmux. Strips up to four leading non-alnum/space bytes
-# (a status glyph) followed by a space.
-GLYPH_FMT='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:pane_title}'
+# tmux-autoname.tmux. Strips a trailing " | <project>" suffix (codex),
+# then up to four leading non-alnum/space bytes (a status glyph) followed
+# by a space, so the hook's change-filter and normalize_title() agree on
+# what "the same title" means.
+GLYPH_FMT='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:#{s/ \| [^|]*$//:pane_title}}'
 
 gopt() {
   # $1 = option name, $2 = default
@@ -51,23 +53,37 @@ is_agent() {
   esac
 }
 
+# Strip a leading status-glyph token (1-4 non-alnum/space bytes followed by
+# a space), the same byte rule as GLYPH_FMT above.
+strip_glyph() {
+  printf '%s' "$1" | LC_ALL=C sed -E 's/^[^A-Za-z0-9 ]{1,4} //'
+}
+
+# True (0) when $1 contains at least one letter, digit, or CJK character -
+# i.e. it is not just glyphs, punctuation, or spaces (a placeholder).
+has_content() {
+  case "$1" in
+    *[A-Za-z0-9]*) return 0 ;;
+  esac
+  printf '%s' "$1" | grep -qP '[\p{L}\p{N}]' 2>/dev/null
+}
+
 # Normalise an agent's raw pane_title into a meaningful Task, or print
 # nothing when the title is a placeholder (no meaningful title yet).
 normalize_title() {
   cmd=$1
   raw=$2
+  candidate=""
   case "$cmd" in
     claude)
-      stripped=$(printf '%s' "$raw" | LC_ALL=C sed -E 's/^[^A-Za-z0-9 ]{1,4} //')
-      case "$stripped" in
-        "Claude Code" | "") printf '' ;;
-        *) printf '%s' "$stripped" ;;
+      candidate=$(strip_glyph "$raw")
+      case "$candidate" in
+        "Claude Code") candidate="" ;;
       esac
       ;;
     codex)
       case "$raw" in
-        *" | "*) printf '%s' "${raw% | *}" ;;
-        *) printf '' ;;
+        *" | "*) candidate=$(strip_glyph "${raw% | *}") ;;
       esac
       ;;
     pi)
@@ -75,15 +91,17 @@ normalize_title() {
         "π - "*)
           rest=${raw#"π - "}
           case "$rest" in
-            *" - "*) printf '%s' "${rest%% - *}" ;;
-            *) printf '' ;;
+            *" - "*) candidate=$(strip_glyph "${rest%% - *}") ;;
           esac
           ;;
-        *) printf '' ;;
       esac
       ;;
-    *) printf '' ;;
   esac
+  if [ -n "$candidate" ] && has_content "$candidate"; then
+    printf '%s' "$candidate"
+  else
+    printf ''
+  fi
 }
 
 # Compute the Workspace for a pane path: the session-container rule, then
