@@ -142,8 +142,12 @@ if [ -n "$key_clear" ]; then
 fi
 key_pick=$(tmux show-option -gqv @tmux-autoname-key-pick)
 if [ -n "$key_pick" ]; then
+  # window_format is set only while rendering a window line; session lines
+  # fall back to the session name. #{window_index} is left out entirely -
+  # the old format's "#{window_index}: #{@tmux-autoname-label}" duplicated
+  # the index because choose-tree already prefixes window lines with it.
   tmux bind-key "$key_pick" \
-    choose-tree -Zw -F "#{window_index}: #{@tmux-autoname-label}"
+    choose-tree -Zw -F '#{?window_format,#{?@tmux-autoname-label,#{@tmux-autoname-label},#{window_name}},#{session_name}}'
 fi
 
 # Sync every window on every session, not just the current one: the loader
