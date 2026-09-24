@@ -113,7 +113,7 @@ export type ExplainReport = {
   record?: NameRecord;
   provenance?: "fallback" | "ai";
   accepted: boolean;
-  // STAGE 5: the accepted proposal's model-reported confidence (0-1);
+  // the accepted proposal's model-reported confidence (0-1);
   // diagnostic only, not part of the Name Record's durable meaning.
   confidence?: number;
   manualName?: string;

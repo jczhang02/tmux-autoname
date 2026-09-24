@@ -173,7 +173,7 @@ export class AiSdkModel implements ModelPort {
   }
 }
 
-// STAGE 5: evidence is structured and ordered by trust (SPEC.md section 7 /
+// evidence is structured and ordered by trust (SPEC.md section 7 /
 // ADR 0002): settled active-pane text, then shell lifecycle events, then
 // tmux/git/path metadata, then pane title as a weak hint only. The few-shot
 // contrasts below are grounded in CONTEXT.md's Task definition -- a stable

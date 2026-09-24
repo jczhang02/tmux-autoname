@@ -187,7 +187,7 @@ describe("AutonameRuntime interface", () => {
     expect(model.calls).toHaveLength(1);
     const accepted = await runtime.explain({ windowId: "@1" });
     expect(accepted.accepted).toBe(true);
-    // STAGE 5: the accepted proposal's confidence is threaded into state and
+    // the accepted proposal's confidence is threaded into state and
     // surfaced in `explain`.
     expect(accepted.confidence).toBe(0.95);
 
@@ -201,7 +201,7 @@ describe("AutonameRuntime interface", () => {
     );
   });
 
-  // STAGE 5: `new` discards the accepted Task and its confidence together --
+  // `new` discards the accepted Task and its confidence together --
   // a stale confidence score must not survive the work it was scored for.
   test("new work clears the accepted proposal's confidence", async () => {
     const tmux = new FakeTmux();
@@ -598,7 +598,7 @@ describe("AutonameRuntime interface", () => {
   });
 
   // Characterization tests for #handleLocked (manual mode, dedup, rate-limit
-  // blocking, debounce, refresh forcing) pinned before the STAGE 2 refactor
+  // blocking, debounce, refresh forcing) pinned before the #handleLocked refactor
   // that splits it into #primeSnapshotState / #updateLocalRecord /
   // #decideTrigger / #scheduleOrRun. These must stay green across that
   // refactor with zero behaviour change.

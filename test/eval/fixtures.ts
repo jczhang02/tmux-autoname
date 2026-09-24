@@ -1,4 +1,4 @@
-// STAGE 5: offline naming-quality eval fixtures. Shared between the
+// offline naming-quality eval fixtures. Shared between the
 // deterministic unit test (test/eval.test.ts, part of `bun run test`) and
 // the opt-in harness (test/eval/run.ts, `bun run eval`) that scores real
 // model output against these expectations.

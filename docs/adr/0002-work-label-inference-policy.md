@@ -5,7 +5,7 @@ Status: Accepted. Implemented. Date: 2026-09-23.
 ## Context
 
 The baseline was SPEC.md v3, which this revises; SPEC.md has since been
-updated to match (STAGE 6 documentation sync). This ADR
+updated to match. This ADR
 covers what evidence may reach the model before a Task is accepted, what
 triggers a pre-acceptance inference attempt, how the pre-acceptance Workspace
 guess is chosen, and how rate limits and failure outcomes behave. It assumes

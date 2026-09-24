@@ -1,4 +1,4 @@
-// STAGE 5: deterministic coverage for the offline naming eval. This never
+// deterministic coverage for the offline naming eval. This never
 // calls a real model -- it only checks that every fixture parses and that
 // the prompt builder handles it without throwing. The real scoring harness
 // (`bun run eval`) is opt-in, like the soak test, and is not part of this

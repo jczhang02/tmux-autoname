@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// STAGE 5: offline naming-quality eval. Runs test/eval/fixtures/*.json
+// offline naming-quality eval. Runs test/eval/fixtures/*.json
 // through the real, configured model (src/config.ts / src/adapters.ts) and
 // scores validity, keyword match, abstention correctness, and stability
 // across near-duplicate evidence.
