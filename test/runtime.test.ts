@@ -259,6 +259,50 @@ describe("AutonameRuntime interface", () => {
     expect(tmux.get("@1").windowName).toBe(fallback);
   });
 
+  test("evicting a tracked window clears a stale generating badge instead of leaving it stuck", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot({ windowId: "@1" }));
+    const pendingFirst = deferred<ReturnType<typeof proposalFor>>();
+    const model = new FakeModel((request) =>
+      request.windowId === "@1" ? pendingFirst.promise : Promise.resolve(proposalFor(request)),
+    );
+    const runtime = new AutonameRuntime({ tmux, model, config: config() });
+
+    // Put @1 into the "generating" badge state via an in-flight AI call that
+    // never resolves, then age it out of the runtime's tracked-window cache
+    // by touching enough other windows to reach MAX_RUNTIME_WINDOWS.
+    await runtime.handle(event("content_settled", { windowId: "@1" }));
+    expect((await runtime.explain({ windowId: "@1" })).badge.state).toBe("generating");
+
+    for (let index = 2; index <= 257; index += 1) {
+      const windowId = `@${index}`;
+      tmux.add(
+        windowSnapshot({
+          windowId,
+          sessionName: `proj${index}`,
+          sessionPath: `/tmp/proj${index}`,
+          panes: [
+            {
+              id: `%${index}`,
+              active: true,
+              cwd: `/tmp/proj${index}`,
+              command: "zsh",
+              pid: 100 + index,
+              title: "zsh",
+            },
+          ],
+        }),
+      );
+      await runtime.handle(event("window_changed", { windowId }));
+    }
+
+    const badgesFor1 = tmux.badges.filter((entry) => entry.windowId === "@1");
+    expect(badgesFor1.at(-1)?.badge).toBe(badgeText("healthy", "plain"));
+    expect(badgesFor1.some((entry) => entry.badge === badgeText("generating", "plain"))).toBe(
+      true,
+    );
+  });
+
   test("restores automatic quotas across daemon runtime restarts", async () => {
     const tmux = new FakeTmux();
     tmux.add(windowSnapshot());

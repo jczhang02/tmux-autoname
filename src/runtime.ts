@@ -180,7 +180,7 @@ export class AutonameRuntime {
 
   async explain(target: TmuxTarget): Promise<ExplainReport> {
     const snapshot = await this.#tmux.snapshot(target);
-    const state = this.#stateFor(snapshot);
+    const state = await this.#stateFor(snapshot);
     this.#pruneCalls(state, this.#clock.now());
     const report: ExplainReport = {
       windowId: snapshot.windowId,
@@ -231,7 +231,7 @@ export class AutonameRuntime {
     event: SemanticEvent,
     snapshot: TmuxWindowSnapshot,
   ): Promise<RuntimeOutcome> {
-    const state = this.#stateFor(snapshot);
+    const state = await this.#stateFor(snapshot);
     state.lastProfile = snapshot.displayProfile ?? this.#config.display.profile;
     state.badgeStyle = snapshot.badgeStyle ?? state.badgeStyle;
     if (!state.badgeSynced) {
@@ -518,7 +518,7 @@ export class AutonameRuntime {
     return { kind: "manual", windowId: snapshot.windowId, name };
   }
 
-  #stateFor(snapshot: TmuxWindowSnapshot): RuntimeWindowState {
+  async #stateFor(snapshot: TmuxWindowSnapshot): Promise<RuntimeWindowState> {
     if (!this.#serverRestored) {
       this.#serverRestored = true;
       this.#serverCallTimes.push(...(snapshot.serverPersisted?.callTimes ?? []));
@@ -535,6 +535,13 @@ export class AutonameRuntime {
         if (oldest[1].pendingTimer !== undefined) this.#clock.clearTimeout(oldest[1].pendingTimer);
         oldest[1].inFlight?.abort();
         this.#states.delete(oldest[0]);
+        // Evicting an in-flight window must not leave a stale "generating" badge
+        // displayed for a window this runtime no longer tracks.
+        await this.#setBadge(
+          oldest[0],
+          oldest[1],
+          oldest[1].mode === "manual" ? "manual" : "healthy",
+        );
       }
     }
     const candidates = buildScopeCandidates(snapshot);
