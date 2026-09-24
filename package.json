@@ -6,7 +6,7 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "build": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/cli.ts --outfile dist/tmux-autoname",
-    "test": "bun test test/config-and-model.test.ts test/integrations.test.ts test/runtime.test.ts test/simulation.test.ts",
+    "test": "bun test test/config-and-model.test.ts test/daemon.test.ts test/integrations.test.ts test/runtime.test.ts test/simulation.test.ts",
     "test:e2e": "bun run build && bun test test/e2e.test.ts --timeout 30000",
     "test:simulation": "bun test test/simulation.test.ts",
     "test:soak": "bun run build && TMUX_AUTONAME_RUN_SOAK=1 TMUX_AUTONAME_SOAK_MS=1800000 bun test test/soak.test.ts --timeout 1900000",

@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ZodError } from "zod";
 import { AiSdkModel, TmuxCliPort } from "./adapters";
-import { loadConfig } from "./config";
+import { type AppConfig, loadConfig } from "./config";
 import { semanticEventSchema, type SemanticEvent } from "./domain";
 import { AutonameRuntime, type ExplainReport, type RuntimeOutcome } from "./runtime";
 
@@ -215,12 +216,28 @@ export const runDaemon = async (tmux: TmuxCliPort): Promise<void> => {
   if (await daemonPidAlive(paths.pid)) return;
   await unlink(paths.socket).catch(() => undefined);
 
-  const config = await loadConfig();
-  const runtime = new AutonameRuntime({
-    tmux,
-    config,
-    ...(config.ai ? { model: new AiSdkModel(config.ai) } : {}),
-  });
+  let config: AppConfig;
+  try {
+    config = await loadConfig();
+  } catch (error) {
+    await logDiagnostic(paths.log, describeConfigError(error));
+    throw error;
+  }
+
+  let runtime: AutonameRuntime;
+  try {
+    runtime = new AutonameRuntime({
+      tmux,
+      config,
+      ...(config.ai ? { model: new AiSdkModel(config.ai) } : {}),
+    });
+  } catch (error) {
+    await logDiagnostic(
+      paths.log,
+      `runtime_construction_failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
+  }
   const monitor = new ContentMonitor({
     tmux,
     settleMs: config.limits.content_settle_ms,
@@ -408,6 +425,19 @@ export const daemonRequest = async (
       reject(error);
     });
   });
+};
+
+// Config load failures happen inside a child process whose stdio is
+// "ignore" (see startDaemon), so the only way to name the cause for
+// `tmux-autoname explain` and the diagnostic log is to write it here before
+// rethrowing and letting the process exit.
+export const describeConfigError = (error: unknown): string => {
+  if (error instanceof ZodError) {
+    const issue = error.issues[0];
+    const path = issue?.path.join(".") || "(root)";
+    return `config_invalid: ${path}: ${issue?.message ?? "invalid configuration"}`;
+  }
+  return `config_parse_error: ${error instanceof Error ? error.message : String(error)}`;
 };
 
 export const logDiagnostic = async (path: string, code: string): Promise<void> => {
