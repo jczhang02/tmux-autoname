@@ -1,16 +1,334 @@
 #!/usr/bin/env sh
+# tmux-autoname: mirror agent-generated titles onto tmux window names.
+# See docs/adr/0004-mirror-agent-titles.md for the behaviour this implements.
 set -eu
 
-SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-PROJECT_DIR=$(dirname -- "$SCRIPT_DIR")
+# Glyph-stripping format, shared with the pane-title-changed hook in
+# tmux-autoname.tmux. Strips up to four leading non-alnum/space bytes
+# (a status glyph) followed by a space.
+GLYPH_FMT='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:pane_title}'
 
-if [ -x "$PROJECT_DIR/dist/tmux-autoname" ]; then
-  exec "$PROJECT_DIR/dist/tmux-autoname" "$@"
-fi
+gopt() {
+  # $1 = option name, $2 = default
+  v=$(tmux show-option -gqv "$1" 2>/dev/null) || v=""
+  if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
 
-if command -v bun >/dev/null 2>&1; then
-  exec bun "$PROJECT_DIR/src/cli.ts" "$@"
-fi
+wopt() {
+  # $1 = window id, $2 = option name
+  tmux show-option -t "$1" -wqv "$2" 2>/dev/null || printf ''
+}
 
-echo "tmux-autoname: no compiled binary at $PROJECT_DIR/dist/tmux-autoname and no 'bun' on PATH; run 'bun run build' or install bun (https://bun.sh)" >&2
-exit 127
+wset() {
+  # $1 = window id, $2 = option name, $3 = value
+  tmux set-option -t "$1" -w -q "$2" "$3" 2>/dev/null || true
+}
+
+wunset() {
+  # $1 = window id, $2 = option name
+  tmux set-option -t "$1" -wu "$2" 2>/dev/null || true
+}
+
+pane_field() {
+  # $1 = pane id, $2 = format variable name (no braces)
+  tmux display-message -p -t "$1" "#{$2}" 2>/dev/null || printf ''
+}
+
+resolve_win() {
+  # $1 = target (pane, window, or empty for current)
+  if [ -n "$1" ]; then
+    tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null || printf ''
+  else
+    tmux display-message -p '#{window_id}' 2>/dev/null || printf ''
+  fi
+}
+
+is_agent() {
+  # $1 = pane_current_command, uses $agents (space-separated)
+  case " $agents " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Normalise an agent's raw pane_title into a meaningful Task, or print
+# nothing when the title is a placeholder (no meaningful title yet).
+normalize_title() {
+  cmd=$1
+  raw=$2
+  case "$cmd" in
+    claude)
+      stripped=$(printf '%s' "$raw" | LC_ALL=C sed -E 's/^[^A-Za-z0-9 ]{1,4} //')
+      case "$stripped" in
+        "Claude Code" | "") printf '' ;;
+        *) printf '%s' "$stripped" ;;
+      esac
+      ;;
+    codex)
+      case "$raw" in
+        *" | "*) printf '%s' "${raw% | *}" ;;
+        *) printf '' ;;
+      esac
+      ;;
+    pi)
+      case "$raw" in
+        "π - "*)
+          rest=${raw#"π - "}
+          case "$rest" in
+            *" - "*) printf '%s' "${rest%% - *}" ;;
+            *) printf '' ;;
+          esac
+          ;;
+        *) printf '' ;;
+      esac
+      ;;
+    *) printf '' ;;
+  esac
+}
+
+# Compute the Workspace for a pane path: the session-container rule, then
+# the main git repository basename (worktrees map to their main repo), then
+# the directory basename, with $HOME shown as "~".
+compute_workspace() {
+  cwd=$1
+  session=$2
+  [ -n "$cwd" ] || { printf ''; return 0; }
+
+  if [ -n "$session" ]; then
+    p=$cwd
+    while [ -n "$p" ] && [ "$p" != "/" ]; do
+      b=$(basename -- "$p")
+      if [ "$b" = "$session" ]; then
+        printf '%s' "$session"
+        return 0
+      fi
+      p=$(dirname -- "$p")
+    done
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    gcd=$(cd "$cwd" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || gcd=""
+    if [ -n "$gcd" ]; then
+      main=$(dirname -- "$gcd")
+      printf '%s' "$(basename -- "$main")"
+      return 0
+    fi
+  fi
+
+  if [ "$cwd" = "${HOME:-}" ]; then
+    printf '~'
+    return 0
+  fi
+  basename -- "$cwd"
+}
+
+do_sync() {
+  target=$1
+  if [ -z "$target" ]; then
+    target=$(tmux display-message -p '#{window_id}' 2>/dev/null) || return 0
+  fi
+  win=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || return 0
+  [ -n "$win" ] || return 0
+  active_pane=$(tmux display-message -p -t "$win" '#{pane_id}' 2>/dev/null) || return 0
+  [ -n "$active_pane" ] || return 0
+
+  case "$target" in
+    %*) trig_pane=$target ;;
+    *) trig_pane=$active_pane ;;
+  esac
+
+  case "$target" in
+    %*)
+      stripped=$(tmux display-message -p -t "$target" "$GLYPH_FMT" 2>/dev/null) || stripped=""
+      tmux set-option -p -t "$target" -q @tmux-autoname-seen "$stripped" 2>/dev/null || true
+      ;;
+  esac
+
+  agents=$(gopt @tmux-autoname-agents 'claude codex pi')
+
+  new_title=""
+  for pane in "$active_pane" "$trig_pane"; do
+    [ -n "$pane" ] || continue
+    pcmd=$(pane_field "$pane" pane_current_command)
+    [ -n "$pcmd" ] || continue
+    is_agent "$pcmd" || continue
+    praw=$(pane_field "$pane" pane_title)
+    nt=$(normalize_title "$pcmd" "$praw")
+    if [ -n "$nt" ]; then
+      new_title=$nt
+      break
+    fi
+  done
+
+  pin=$(wopt "$win" @tmux-autoname-pin)
+  if [ -z "$pin" ] && [ -n "$new_title" ]; then
+    old_title=$(wopt "$win" @tmux-autoname-title)
+    if [ "$new_title" != "$old_title" ]; then
+      wset "$win" @tmux-autoname-title "$new_title"
+    fi
+  fi
+
+  title=$pin
+  [ -n "$title" ] || title=$(wopt "$win" @tmux-autoname-title)
+
+  cwd=$(pane_field "$active_pane" pane_current_path)
+  session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""
+
+  fixed_ws=$(wopt "$win" @tmux-autoname-workspace)
+  if [ -n "$title" ] && [ -n "$fixed_ws" ]; then
+    workspace=$fixed_ws
+  else
+    workspace=$(compute_workspace "$cwd" "$session")
+    if [ -n "$title" ] && [ -z "$fixed_ws" ] && [ -n "$workspace" ]; then
+      wset "$win" @tmux-autoname-workspace "$workspace"
+    fi
+  fi
+
+  if [ -n "$title" ]; then
+    label="$workspace/$title"
+  else
+    label=$workspace
+  fi
+  wset "$win" @tmux-autoname-label "$label"
+
+  maxw=$(gopt @tmux-autoname-max-width 32)
+  newname=$(tmux display-message -p -t "$win" "#{=/${maxw}/…:@tmux-autoname-label}" 2>/dev/null) || newname="$label"
+
+  applied=$(wopt "$win" @tmux-autoname-applied)
+  curname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null) || curname=""
+  if [ -n "$applied" ] && [ "$curname" != "$applied" ]; then
+    return 0
+  fi
+  if [ "$curname" != "$newname" ]; then
+    tmux rename-window -t "$win" -- "$newname" 2>/dev/null || true
+  fi
+  wset "$win" @tmux-autoname-applied "$newname"
+  return 0
+}
+
+cmd_sync() {
+  opt_t=""
+  if [ "${1:-}" = "-t" ]; then
+    opt_t=${2:-}
+    shift 2
+  fi
+  do_sync "$opt_t"
+}
+
+cmd_set() {
+  opt_t=""
+  if [ "${1:-}" = "-t" ]; then
+    opt_t=${2:-}
+    shift 2
+  fi
+  title="$*"
+  [ -n "$title" ] || {
+    echo "tmux-autoname: set requires a title" >&2
+    return 1
+  }
+  win=$(resolve_win "$opt_t")
+  [ -n "$win" ] || return 1
+  wset "$win" @tmux-autoname-pin "$title"
+  do_sync "$win"
+}
+
+cmd_clear() {
+  opt_t=""
+  if [ "${1:-}" = "-t" ]; then
+    opt_t=${2:-}
+    shift 2
+  fi
+  win=$(resolve_win "$opt_t")
+  [ -n "$win" ] || return 1
+  wunset "$win" @tmux-autoname-pin
+  wunset "$win" @tmux-autoname-title
+  wunset "$win" @tmux-autoname-workspace
+  do_sync "$win"
+}
+
+cmd_auto() {
+  opt_t=""
+  if [ "${1:-}" = "-t" ]; then
+    opt_t=${2:-}
+    shift 2
+  fi
+  win=$(resolve_win "$opt_t")
+  [ -n "$win" ] || return 1
+  curname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null) || curname=""
+  wset "$win" @tmux-autoname-applied "$curname"
+  do_sync "$win"
+}
+
+cmd_status() {
+  opt_t=""
+  if [ "${1:-}" = "-t" ]; then
+    opt_t=${2:-}
+    shift 2
+  fi
+  win=$(resolve_win "$opt_t")
+  [ -n "$win" ] || return 1
+  pin=$(wopt "$win" @tmux-autoname-pin)
+  sticky=$(wopt "$win" @tmux-autoname-title)
+  workspace=$(wopt "$win" @tmux-autoname-workspace)
+  label=$(wopt "$win" @tmux-autoname-label)
+  applied=$(wopt "$win" @tmux-autoname-applied)
+  curname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null) || curname=""
+
+  if [ -n "$pin" ]; then
+    source=pin
+  elif [ -n "$sticky" ]; then
+    source=agent
+  else
+    source=none
+  fi
+
+  manual=no
+  if [ -n "$applied" ] && [ "$curname" != "$applied" ]; then
+    manual=yes
+  fi
+
+  printf 'workspace: %s\n' "$workspace"
+  printf 'title source: %s\n' "$source"
+  printf 'sticky title: %s\n' "$sticky"
+  printf 'pin: %s\n' "$pin"
+  printf 'label: %s\n' "$label"
+  printf 'manual: %s\n' "$manual"
+}
+
+cmd_help() {
+  cat <<'EOF'
+tmux-autoname: mirror agent-generated titles onto tmux window names.
+
+Usage:
+  tmux-autoname sync [-t pane_or_window]
+  tmux-autoname set [-t window] <title...>
+  tmux-autoname clear [-t window]
+  tmux-autoname auto [-t window]
+  tmux-autoname status [-t window]
+  tmux-autoname help
+
+sync recomputes the window's name from its agent panes. set pins a title
+that agent titles cannot replace. clear drops the pin, the sticky title,
+and the fixed Workspace. auto forgets a manual rename and re-syncs.
+status prints the window's current naming state.
+EOF
+}
+
+main() {
+  sub=${1:-help}
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    sync) cmd_sync "$@" ;;
+    set) cmd_set "$@" ;;
+    clear) cmd_clear "$@" ;;
+    auto) cmd_auto "$@" ;;
+    status) cmd_status "$@" ;;
+    help | -h | --help) cmd_help ;;
+    *)
+      cmd_help >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
