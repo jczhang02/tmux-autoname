@@ -68,6 +68,10 @@ export type PersistedWindowState = {
   // replace it again; only an explicit `refresh` or `new` may. Absent (or
   // false) means the record, if any, is still a provisional guess.
   accepted?: boolean;
+  // STAGE 5: the accepted proposal's model-reported confidence (0-1),
+  // surfaced in `explain`; diagnostic only, not part of the Name Record's
+  // durable meaning (ADR 0001).
+  confidence?: number;
   manualName?: string;
   lastAppliedName?: string;
   callTimes?: number[];
@@ -92,6 +96,7 @@ export const persistedWindowStateSchema: z.ZodType<PersistedWindowState> = z.obj
     .optional(),
   provenance: z.enum(["fallback", "ai"]).optional(),
   accepted: z.boolean().optional(),
+  confidence: z.number().min(0).max(1).optional(),
   manualName: z.string().optional(),
   lastAppliedName: z.string().optional(),
   callTimes: z.array(z.number().int().nonnegative()).max(1000).optional(),
@@ -551,7 +556,9 @@ export const isValidTask = (task: string): boolean => {
 };
 
 export type ProposalResolution =
-  | { kind: "accepted"; record: NameRecord }
+  // STAGE 5: confidence carries the accepted proposal's model-reported score
+  // through to persisted state and `explain`; diagnostic only.
+  | { kind: "accepted"; record: NameRecord; confidence: number }
   | { kind: "kept" }
   | { kind: "abstained" };
 
@@ -589,6 +596,7 @@ export const resolveProposal = (
       scope: { workspace: workspace.value },
       task,
     },
+    confidence: proposal.confidence,
   };
 };
 

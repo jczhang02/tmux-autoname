@@ -113,6 +113,9 @@ export type ExplainReport = {
   record?: NameRecord;
   provenance?: "fallback" | "ai";
   accepted: boolean;
+  // STAGE 5: the accepted proposal's model-reported confidence (0-1);
+  // diagnostic only, not part of the Name Record's durable meaning.
+  confidence?: number;
   manualName?: string;
   visibleName: string;
   badge: { state: BadgeState; text: string; style: BadgeStyle };
@@ -230,6 +233,7 @@ export class AutonameRuntime {
       },
       ...(state.record ? { record: state.record } : {}),
       ...(state.provenance ? { provenance: state.provenance } : {}),
+      ...(state.confidence !== undefined ? { confidence: state.confidence } : {}),
       ...(state.manualName ? { manualName: state.manualName } : {}),
       ...(state.fingerprint ? { fingerprint: state.fingerprint } : {}),
       ...(state.lastError ? { lastError: state.lastError } : {}),
@@ -448,6 +452,7 @@ export class AutonameRuntime {
     }
     state.accepted = false;
     state.provenance = "fallback";
+    state.confidence = undefined;
     state.record = {
       scope: { workspace: localScope.workspace },
       task: "",
@@ -634,6 +639,7 @@ export class AutonameRuntime {
         current.record = resolution.record;
         current.provenance = "ai";
         current.accepted = true;
+        current.confidence = resolution.confidence;
       } else if (resolution.kind === "kept") {
         // Only reachable when there was a previous Task to keep (refresh).
         current.accepted = true;
@@ -772,6 +778,7 @@ export class AutonameRuntime {
         : {}),
       ...(persisted?.provenance ? { provenance: persisted.provenance } : {}),
       accepted,
+      ...(persisted?.confidence !== undefined ? { confidence: persisted.confidence } : {}),
       ...(persisted?.manualName ? { manualName: persisted.manualName } : {}),
       ...(persisted?.lastAppliedName ? { lastAppliedName: persisted.lastAppliedName } : {}),
       lastLocalWorkspace: ungrounded ? persistedRecord!.scope.workspace : localScope.workspace,
@@ -879,6 +886,7 @@ export class AutonameRuntime {
       ...(state.record ? { record: state.record } : {}),
       ...(state.provenance ? { provenance: state.provenance } : {}),
       ...(state.accepted ? { accepted: state.accepted } : {}),
+      ...(state.confidence !== undefined ? { confidence: state.confidence } : {}),
       ...(state.manualName ? { manualName: state.manualName } : {}),
       ...(state.lastAppliedName ? { lastAppliedName: state.lastAppliedName } : {}),
       ...(state.callTimes.length > 0 ? { callTimes: state.callTimes } : {}),

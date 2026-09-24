@@ -175,7 +175,7 @@ tmux rename-window ""
 |---|---|
 | `tmux-autoname refresh` | 重新识别：立即请求推理，等待 applied、failed 或 blocked 的最终结果并打印。在新结果被接受前保留旧名称，包括推理失败或放弃时 |
 | `tmux-autoname new` | 开始新工作：丢弃 window 的 Task，显示仅含 Workspace 的名称，并等待变化的证据后才再次推理。手动模式下会拒绝执行 |
-| `tmux-autoname explain` | 显示当前名称记录、模式、徽标、错误、请求计数和熔断状态，不发起推理 |
+| `tmux-autoname explain` | 显示当前名称记录、模式、徽标、错误、已接受提案的置信度、请求计数和熔断状态，不发起推理 |
 | `tmux-autoname auto` | 清除手动名称，让 window 恢复自动命名 |
 | `tmux-autoname secrets reload` | 重启 daemon，重新读取配置和凭据 |
 

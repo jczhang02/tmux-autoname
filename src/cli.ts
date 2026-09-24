@@ -71,6 +71,7 @@ const formatExplain = (report: ExplainReport): string => {
     `Task: ${report.record?.task || "(pending AI)"}`,
     `Source: ${report.provenance === "ai" ? "AI" : "local provisional"}`,
     `Accepted: ${report.accepted ? "yes" : "no"}`,
+    ...(report.confidence !== undefined ? [`Confidence: ${report.confidence.toFixed(2)}`] : []),
     `Calls: window ${report.limits.windowCallsLastHour}/${report.limits.windowCallLimit}, server ${report.limits.serverCallsLastHour}/${report.limits.serverCallLimit}`,
     `Status: ${status}`,
   ];

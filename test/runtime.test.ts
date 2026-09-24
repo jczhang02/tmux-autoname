@@ -185,7 +185,11 @@ describe("AutonameRuntime interface", () => {
     await runtime.handle(event("content_settled"));
     await clock.advance(10);
     expect(model.calls).toHaveLength(1);
-    expect((await runtime.explain({ windowId: "@1" })).accepted).toBe(true);
+    const accepted = await runtime.explain({ windowId: "@1" });
+    expect(accepted.accepted).toBe(true);
+    // STAGE 5: the accepted proposal's confidence is threaded into state and
+    // surfaced in `explain`.
+    expect(accepted.confidence).toBe(0.95);
 
     tmux.setContent("%1", "User: investigate daemon resource usage");
     await runtime.handle(event("content_settled"));
@@ -195,6 +199,23 @@ describe("AutonameRuntime interface", () => {
     expect((await runtime.explain({ windowId: "@1" })).record?.task).toBe(
       "redesign-naming-plugin",
     );
+  });
+
+  // STAGE 5: `new` discards the accepted Task and its confidence together --
+  // a stale confidence score must not survive the work it was scored for.
+  test("new work clears the accepted proposal's confidence", async () => {
+    const tmux = new FakeTmux();
+    tmux.add(windowSnapshot());
+    const clock = new FakeClock();
+    const model = new FakeModel();
+    const runtime = new AutonameRuntime({ tmux, model, clock, config: config() });
+
+    await runtime.handle(event("content_settled"));
+    await clock.advance(10);
+    expect((await runtime.explain({ windowId: "@1" })).confidence).toBe(0.95);
+
+    await runtime.handle(event("new_work_requested"));
+    expect((await runtime.explain({ windowId: "@1" })).confidence).toBeUndefined();
   });
 
   test("rejects an older model result that finishes after a forced refresh", async () => {

@@ -175,7 +175,7 @@ User-facing commands:
 |---|---|
 | `tmux-autoname refresh` | Re-identification: requests inference now, waits for the final applied, failed, or blocked result, and prints it. Keeps the old label until a replacement is accepted, including on failure or abstention |
 | `tmux-autoname new` | New Work: discards the window's Task, shows a Workspace-only name, and waits for changed evidence before inferring again. Refuses in manual mode |
-| `tmux-autoname explain` | Prints the current name record, mode, badge, error, request counts, and circuit state without requesting inference |
+| `tmux-autoname explain` | Prints the current name record, mode, badge, error, accepted proposal's confidence, request counts, and circuit state without requesting inference |
 | `tmux-autoname auto` | Clears a manual name and returns the window to automatic mode |
 | `tmux-autoname secrets reload` | Restarts the daemon and reloads configuration and credentials |
 
