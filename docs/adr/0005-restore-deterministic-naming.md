@@ -35,10 +35,8 @@ is the 0.4 rule with the Task always empty.
 - **Area** is the pane path relative to the chosen Workspace's root. It is
   omitted when the path is the root itself or lies outside it. It is
   additionally capped to its first `@tmux-autoname-area-depth` path segments
-  (default 1; 0 keeps it in full). This depth limit is not part of the
-  original 0.4 rule - it is a new addition made when porting it here,
-  because the maintainer found a multi-segment Area noisier day to day than
-  the original TypeScript version ever produced.
+  (default 1; 0 keeps it in full). The depth limit is an addition to the
+  original 0.4 rule, adopted during this port to keep names short.
 
 **No AI.** No model calls, no API keys, no screen capture, and no
 agent-title mirroring. Everything from ADR 0004 that depended on agent titles

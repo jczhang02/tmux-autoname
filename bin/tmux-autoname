@@ -98,16 +98,11 @@ compute_workspace() {
       ;;
   esac
 
-  session_owns_cwd=0
-  sp_base=""
-  if [ -n "$session" ] && [ -n "$session_path" ]; then
-    sp_base=$(basename -- "$session_path")
-    if [ "$sp_base" = "$session" ]; then
-      if [ "$cwd" = "$session_path" ] || is_under "$cwd" "$session_path"; then
-        printf '%s\t%s' "$session" "$session_path"
-        return 0
-      fi
-      session_owns_cwd=1
+  if [ -n "$session" ] && [ -n "$session_path" ] &&
+    [ "$(basename -- "$session_path")" = "$session" ]; then
+    if [ "$cwd" = "$session_path" ] || is_under "$cwd" "$session_path"; then
+      printf '%s\t%s' "$session" "$session_path"
+      return 0
     fi
   fi
 
@@ -120,11 +115,7 @@ compute_workspace() {
   fi
 
   if [ -n "$session" ]; then
-    if [ "$session_owns_cwd" = 1 ]; then
-      printf '%s\t%s' "$session" "$session_path"
-    else
-      printf '%s\t%s' "$session" ""
-    fi
+    printf '%s\t%s' "$session" ""
     return 0
   fi
 
