@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# tmux-autoname loader. See docs/adr/0004-mirror-agent-titles.md.
+# tmux-autoname loader. See docs/adr/0005-restore-deterministic-naming.md.
 set -eu
 
 CURRENT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -27,11 +27,8 @@ tmux set-environment -g TMUX_AUTONAME_BIN "$AUTONAME_BIN"
 # $TMUX_AUTONAME_BIN back out of the environment.
 bin_q=$(printf '%s' "$AUTONAME_BIN" | sed "s/'/'\\\\''/g")
 
-if [ -z "$(tmux show-option -gqv @tmux-autoname-agents)" ]; then
-  tmux set-option -gq @tmux-autoname-agents 'claude codex pi'
-fi
-if [ -z "$(tmux show-option -gqv @tmux-autoname-max-width)" ]; then
-  tmux set-option -gq @tmux-autoname-max-width 32
+if [ -z "$(tmux show-option -gqv @tmux-autoname-area-depth)" ]; then
+  tmux set-option -gq @tmux-autoname-area-depth 1
 fi
 
 # --- Migration from the pre-0.6 TypeScript/daemon version -----------------
@@ -58,7 +55,8 @@ fi
 # after-rename-window. after-select-pane[120] has no new use, so drop it.
 tmux set-hook -gu 'after-select-pane[120]' 2>/dev/null || true
 
-# Remove the appended badge fragment from window-status formats.
+# Remove the appended badge fragment from window-status formats (left by
+# the pre-0.6 daemon, and by 0.6's agent-title mirroring).
 badge_fragment='#{?#{@tmux-autoname-badge}, #{@tmux-autoname-badge},}'
 for status_option in window-status-format window-status-current-format; do
   current_value=$(tmux show-option -gv "$status_option" 2>/dev/null) || current_value=""
@@ -70,9 +68,12 @@ for status_option in window-status-format window-status-current-format; do
   esac
 done
 
-# Remove obsolete global options.
+# Remove obsolete global options: pre-0.6 daemon options, and 0.6's
+# agent-mirroring options that no longer exist.
 for old_option in @tmux-autoname-profile @tmux-autoname-server-state \
-  @tmux-autoname-badge-style @tmux-autoname-install-badge; do
+  @tmux-autoname-badge-style @tmux-autoname-install-badge \
+  @tmux-autoname-agents @tmux-autoname-max-width \
+  @tmux-autoname-key-set @tmux-autoname-key-clear @tmux-autoname-key-pick; do
   tmux set-option -gu "$old_option" 2>/dev/null || true
 done
 
@@ -86,6 +87,9 @@ done
 # because it is applied first). A window with mode "automatic" is left for
 # the new plugin to take over from scratch. If the state can't be decoded,
 # treat it as manual: never overwrite a name when uncertain.
+#
+# Also drop 0.6's per-window @tmux-autoname-pin/-title/-workspace/-label/
+# -prefill/-seen options: none of them exist in this version.
 MIGRATION_SENTINEL=$(printf '\001tmux-autoname:migrated-manual\001')
 for win in $(tmux list-windows -a -F '#{window_id}' 2>/dev/null); do
   old_state=$(tmux show-option -t "$win" -wqv @tmux-autoname-state 2>/dev/null) || old_state=""
@@ -111,23 +115,13 @@ for win in $(tmux list-windows -a -F '#{window_id}' 2>/dev/null); do
       esac
     fi
   fi
+  for old_wopt in @tmux-autoname-pin @tmux-autoname-title @tmux-autoname-workspace \
+    @tmux-autoname-label @tmux-autoname-prefill @tmux-autoname-seen; do
+    tmux set-option -t "$win" -wu "$old_wopt" 2>/dev/null || true
+  done
 done
 
 # --- Hooks ------------------------------------------------------------------
-#
-# pane-title-changed filters in tmux itself: the glyph-stripped title is
-# compared against a per-pane marker with if-shell -F (no fork) and
-# run-shell only spawns when it actually changed. Stripping codex's
-# trailing " | <project>" here too, the same as GLYPH_FMT in
-# bin/tmux-autoname, keeps this filter and normalize_title() in agreement:
-# a spinner-only change never fires the hook, but any change to the actual
-# title (spinner appearing, disappearing, or the text itself changing)
-# always does, so a stale spinner can't get stuck in the window name.
-glyph_fmt='#{s/^[^A-Za-z0-9 ][^A-Za-z0-9 ]?[^A-Za-z0-9 ]?[^A-Za-z0-9 ]? //:#{s/ \| [^|]*$//:pane_title}}'
-sync_pane_cmd="run-shell -b \\\"'${bin_q}' sync -t '#{pane_id}'\\\""
-tmux set-hook -g 'pane-title-changed[120]' \
-  "if-shell -F '#{!=:${glyph_fmt},#{@tmux-autoname-seen}}' \"${sync_pane_cmd}\""
-
 sync_window_cmd="run-shell -b \"'${bin_q}' sync -t '#{window_id}'\""
 tmux set-hook -g 'after-new-window[120]' "$sync_window_cmd"
 tmux set-hook -g 'after-select-window[120]' "$sync_window_cmd"
@@ -139,52 +133,25 @@ tmux set-hook -g 'client-attached[120]' "$sync_window_cmd"
 # session's first window yet. session-created covers it.
 tmux set-hook -g 'session-created[120]' "$sync_window_cmd"
 
-# An empty `rename-window ""` restores automatic naming. Nested one level
-# deeper than the plain sync hooks above (inside if-shell's command
-# argument), so the inner quotes need an extra level of escaping.
+# after-kill-pane's own pane is already gone by the time it fires; using
+# #{window_id} (as for the other hooks above) syncs the window that
+# remains, from whichever pane is now active in it, rather than anything
+# tied to the killed pane.
+tmux set-hook -g 'after-kill-pane[120]' "$sync_window_cmd"
+
+# An empty `rename-window ""` restores automatic naming; any other rename
+# is a Manual Name that sync will not overwrite until `auto` is run.
 auto_window_cmd="run-shell -b \\\"'${bin_q}' auto -t '#{window_id}'\\\""
 tmux set-hook -g 'after-rename-window[120]' \
   "if-shell -F '#{==:#{window_name},}' \"${auto_window_cmd}\""
 
-# --- Optional key bindings ---------------------------------------------------
+# --- Optional key binding ----------------------------------------------------
 #
-# Off by default; bound only when the option is set, mirroring the opt-in
-# pattern for badges in the old version.
-key_set=$(tmux show-option -gqv @tmux-autoname-key-set)
-if [ -n "$key_set" ]; then
-  # Prefill with the current pin, else the sticky agent title - never the
-  # full "workspace/title" label, or accepting it unchanged would pin
-  # "workspace/workspace/title". do_sync keeps @tmux-autoname-prefill equal
-  # to exactly that (pin, falling back to the sticky title). It has to be a
-  # single plain format: command-prompt's -I splits its argument on commas
-  # before expanding formats, so a "#{?@tmux-autoname-pin,...,...}"
-  # conditional here would be parsed as three separate prompt inputs
-  # instead of one, and always render blank.
-  #
-  # Setting @tmux-autoname-pin directly (rather than shelling out to
-  # `tmux-autoname set "$title"`) avoids re-quoting the submitted text as a
-  # shell argument at all, so apostrophes and other shell-special
-  # characters round-trip: "%%%" inside a double-quoted command-prompt
-  # template substitutes the raw response verbatim.
-  set_cmd="set-option -w @tmux-autoname-pin \"%%%\" ; run-shell -b \"'${bin_q}' sync -t #{window_id}\""
-  tmux bind-key "$key_set" \
-    command-prompt -I '#{@tmux-autoname-prefill}' -p 'tmux-autoname set:' "$set_cmd"
-fi
-key_clear=$(tmux show-option -gqv @tmux-autoname-key-clear)
-if [ -n "$key_clear" ]; then
-  tmux bind-key "$key_clear" \
-    run-shell -b "'${bin_q}' clear -t #{window_id}"
-fi
-key_pick=$(tmux show-option -gqv @tmux-autoname-key-pick)
-if [ -n "$key_pick" ]; then
-  # window_format is set only while rendering a window line; session lines
-  # fall back to the session name. #{window_index} is left out entirely -
-  # the old format's "#{window_index}: #{@tmux-autoname-label}" duplicated
-  # the index because choose-tree already prefixes window lines with it.
-  # A manually named window (name differs from the last applied name) shows
-  # its own name, not the automatic label it no longer displays.
-  tmux bind-key "$key_pick" \
-    choose-tree -Zw -F '#{?window_format,#{?#{&&:#{@tmux-autoname-label},#{==:#{window_name},#{@tmux-autoname-applied}}},#{@tmux-autoname-label},#{window_name}},#{session_name}}'
+# Off by default; bound only when the option is set.
+key_auto=$(tmux show-option -gqv @tmux-autoname-key-auto)
+if [ -n "$key_auto" ]; then
+  tmux bind-key "$key_auto" \
+    run-shell -b "'${bin_q}' auto -t #{window_id}"
 fi
 
 # Sync every window on every session, not just the current one: the loader
