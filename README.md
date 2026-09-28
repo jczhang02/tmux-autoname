@@ -112,6 +112,13 @@ prints a job-control message. It resolves the binary from
 
 - **Activity** is `pane_current_command`, lower-cased, with a
   `-coding-agent` suffix stripped (so `pi-coding-agent` becomes `pi`).
+  When that command is a launcher (`sudo`, `doas`, `env`, `nice`,
+  `timeout`, `systemd-run`, ...) or an interpreter (`node`, `bun`, `deno`,
+  `python*`, `ruby`, `perl`), the foreground process's argv is read and
+  the real program is used instead: `doas emerge -a` becomes `emerge`,
+  `node .../bin/codex` becomes `codex`, `python3 -m http.server` becomes
+  `http.server`. An interpreter with no script (a REPL, `-e`/`-c`) keeps
+  its own name.
 - **Workspace** is the first of these that applies:
   1. For `ssh` or `mosh`, the remote host parsed out of the pane title.
   2. **Session container.** If `#{session_path}`'s basename equals the

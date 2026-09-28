@@ -270,6 +270,32 @@ test_pi_coding_agent_activity_stripped() {
   stop_server
 }
 
+test_node_script_resolves_to_program() {
+  start_server
+  load_plugin
+  mkdir -p "$FAKE_DIR/pkg/bin"
+  # argv becomes "node -s <dir>/pkg/bin/codex", like a node CLI shim;
+  # the interactive sh keeps the pane's foreground process alive.
+  t send-keys -t w "exec -a node sh -s $FAKE_DIR/pkg/bin/codex" Enter
+  sleep 0.2
+  sync_now w
+  assert_eq "node running a CLI script resolves to the script name" \
+    '#{window_name}' 'codex:w'
+  stop_server
+}
+
+test_launcher_resolves_to_command() {
+  start_server
+  load_plugin
+  # argv becomes "doas -s emerge -auDvN", as for "doas emerge -auDvN".
+  t send-keys -t w "exec -a doas sh -s emerge -auDvN" Enter
+  sleep 0.2
+  sync_now w
+  assert_eq "doas launching emerge resolves to emerge" \
+    '#{window_name}' 'emerge:w'
+  stop_server
+}
+
 test_manual_rename_respected() {
   start_server
   load_plugin
@@ -575,6 +601,10 @@ run_all() {
   fi
   test_ssh_workspace_from_title
   test_pi_coding_agent_activity_stripped
+  if [ -r /proc/self/stat ]; then
+    test_node_script_resolves_to_program
+    test_launcher_resolves_to_command
+  fi
   test_manual_rename_respected
   test_auto_restores_after_manual
   test_empty_rename_restores_auto

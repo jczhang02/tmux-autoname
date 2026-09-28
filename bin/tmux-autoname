@@ -56,6 +56,153 @@ compute_activity() {
   printf '%s' "$name"
 }
 
+# True (0) when a pane_current_command is a launcher (sudo, env, ...) or an
+# interpreter (node, python, ...) whose real program is further down argv.
+is_wrapper_command() {
+  # $1 = pane_current_command
+  name=$(basename -- "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  case "$name" in
+    sudo | doas | env | nice | ionice | nohup | time | stdbuf | setsid | \
+      timeout | taskset | chrt | flock | systemd-run | unbuffer | chronic | \
+      node | nodejs | node[0-9]* | bun | deno | \
+      python | python[0-9]* | pypy | pypy[0-9]* | ruby | ruby[0-9]* | perl | perl[0-9]*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Print the argv of the foreground process group leader of a pane's tty,
+# one argument per line. Empty when it can't be read.
+foreground_argv() {
+  # $1 = pane_pid
+  pid=$1
+  case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+  if [ -r "/proc/$pid/stat" ]; then
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
+    # Fields after "(comm) ": state ppid pgrp session tty_nr tpgid ...
+    # shellcheck disable=SC2086
+    set -- ${stat##*) }
+    fg=${6:-}
+    case "$fg" in '' | *[!0-9]* | 0 | -*) return 0 ;; esac
+    tr '\0' '\n' <"/proc/$fg/cmdline" 2>/dev/null || true
+  else
+    fg=$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ') || return 0
+    case "$fg" in '' | *[!0-9]* | 0) return 0 ;; esac
+    ps -o args= -p "$fg" 2>/dev/null | tr ' ' '\n' || true
+  fi
+}
+
+# Resolve a launcher/interpreter argv (one arg per line on stdin) to the
+# program it really runs: `doas emerge -a` -> emerge,
+# `node .../bin/codex` -> codex, `python3 -m http.server` -> http.server.
+# Prints nothing when argv is empty.
+resolve_argv() {
+  LC_ALL=C awk '
+    function base(p) { sub(/\/+$/, "", p); sub(/.*\//, "", p); return p }
+    function lc(s) { return tolower(s) }
+    function is_launcher(n) {
+      return n ~ /^(sudo|doas|env|nice|ionice|nohup|time|stdbuf|setsid|timeout|taskset|chrt|flock|systemd-run|unbuffer|chronic)$/
+    }
+    function is_interp(n) {
+      return n ~ /^(node|nodejs|node[0-9].*|bun|deno|python|python[0-9].*|pypy|pypy[0-9].*|ruby|ruby[0-9].*|perl|perl[0-9].*)$/
+    }
+    # Options that consume the following argument, per launcher.
+    function takes_value(n, o) {
+      if (n == "sudo") return o ~ /^-[uUgCDhprtTR]$/
+      if (n == "doas") return o ~ /^-[uC]$/
+      if (n == "env") return o ~ /^(-u|--unset|-C|--chdir|-S|--split-string)$/
+      if (n == "nice") return o ~ /^(-n|--adjustment)$/
+      if (n == "ionice") return o ~ /^(-c|--class|-n|--classdata|-p|--pid|-P|--pgid|-u|--uid)$/
+      if (n == "stdbuf") return o ~ /^-[ioe]$/
+      if (n == "timeout") return o ~ /^(-s|--signal|-k|--kill-after)$/
+      if (n == "time") return o ~ /^(-f|--format|-o|--output)$/
+      if (n == "flock") return o ~ /^(-w|--timeout|-E|--conflict-exit-code)$/
+      if (n == "systemd-run") return o ~ /^(-u|--unit|-p|--property|-E|--setenv|--description|--slice|-M|--machine|-H|--host|--uid|--gid|--nice|-D|--working-directory|--on-active|--on-boot|--on-startup|--on-unit-active|--on-unit-inactive|--on-calendar|--timer-property|--path-property|--socket-property|--service-type)$/
+      if (n == "chrt") return o ~ /^(-T|--sched-runtime|-P|--sched-period|-D|--sched-deadline)$/
+      return 0
+    }
+    # Positional arguments a launcher takes before the command.
+    function leading_positionals(n) {
+      if (n == "timeout" || n == "taskset" || n == "chrt" || n == "flock") return 1
+      return 0
+    }
+    function script_name(p,    parts, k, s) {
+      k = split(p, parts, "/")
+      s = parts[k]
+      sub(/\.([cm]?[jt]sx?|py[cw]?|rb|pl)$/, "", s)
+      # Generic entry points name the package directory, not the program.
+      while (k > 1 && lc(s) ~ /^(cli|index|main|__main__|run|entry|start|bin|dist|lib|src|build|out|esm|cjs)$/) {
+        k--
+        s = parts[k]
+      }
+      return s
+    }
+    { argv[n++] = $0 }
+    END {
+      i = 0
+      while (i < n) {
+        name = base(argv[i])
+        ln = lc(name)
+        if (is_launcher(ln)) {
+          j = i + 1
+          need = leading_positionals(ln)
+          while (j < n) {
+            a = argv[j]
+            if (a == "--") { j++; break }
+            if (ln == "env" && a ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { j++; continue }
+            if (a ~ /^-./) { j += takes_value(ln, a) ? 2 : 1; continue }
+            if (need > 0) { need--; j++; continue }
+            break
+          }
+          if (j >= n) { print name; exit }
+          i = j
+          continue
+        }
+        if (is_interp(ln)) {
+          j = i + 1
+          sub_seen = 0
+          while (j < n) {
+            a = argv[j]
+            if (a == "--") { j++; break }
+            if (a ~ /^-/) {
+              if (ln ~ /^(node|nodejs|node[0-9].*|bun|deno)$/) {
+                if (a ~ /^(-e|--eval|-p|--print)$/) { print name; exit }
+                if (a ~ /^(-r|--require|--import|--loader|--experimental-loader|-C|--conditions)$/) { j += 2; continue }
+              } else if (ln ~ /^(python|pypy)/) {
+                if (a == "-c") { print name; exit }
+                if (a == "-m") {
+                  if (j + 1 < n) { m = argv[j + 1]; sub(/\.__main__$/, "", m); print m } else print name
+                  exit
+                }
+                if (a ~ /^-[WX]$/) { j += 2; continue }
+              } else if (ln ~ /^ruby/) {
+                if (a == "-e") { print name; exit }
+                if (a ~ /^-[rIC]$/) { j += 2; continue }
+              } else if (ln ~ /^perl/) {
+                if (a ~ /^-[eE]$/) { print name; exit }
+                if (a ~ /^-[IM]$/) { j += 2; continue }
+              }
+              j++
+              continue
+            }
+            # bun run x / deno run x: skip the subcommand word once.
+            if (!sub_seen && ln ~ /^(bun|deno)$/ && a ~ /^(run|x|task)$/) { sub_seen = 1; j++; continue }
+            break
+          }
+          if (j >= n) { print name; exit }
+          s = script_name(argv[j])
+          if (s == "") s = name
+          print s
+          exit
+        }
+        print name
+        exit
+      }
+    }
+  '
+}
+
 # Parse a remote host out of an ssh/mosh pane_title, lower-cased.
 remote_host_from_title() {
   # $1 = pane_title
@@ -212,6 +359,11 @@ do_sync() {
     pcmd=$(pane_field "$active_pane" pane_current_command)
     tries=$((tries + 1))
   done
+  if is_wrapper_command "$pcmd"; then
+    pane_pid=$(pane_field "$active_pane" pane_pid)
+    resolved=$(foreground_argv "$pane_pid" | resolve_argv) || resolved=""
+    [ -z "$resolved" ] || pcmd=$resolved
+  fi
   pane_title=$(pane_field "$active_pane" pane_title)
   cwd=$(pane_field "$active_pane" pane_current_path)
   session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""

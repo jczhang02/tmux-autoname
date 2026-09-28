@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Activity resolves launchers (`sudo`, `doas`, `env`, `nice`, `timeout`,
+  `systemd-run`, ...) and interpreters (`node`, `bun`, `deno`, `python*`,
+  `ruby`, `perl`) to the program they run, from the foreground process's
+  argv: `node .../bin/codex` is now `codex`, `doas emerge` is `emerge`.
+
 ## 0.7.0
 
 **Breaking change:** all AI/agent-title behaviour from 0.6.0 is removed.

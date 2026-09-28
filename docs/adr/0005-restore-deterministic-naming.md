@@ -55,5 +55,7 @@ because tmux has no hook for foreground-program or cwd changes.
 - Names match what the maintainer used daily, minus the AI Task.
 - Without the zsh integration, the activity updates only on window, pane, and
   session events.
-- Further improvements, such as resolving `node .../codex` to `codex`, are
-  optional additions on top of this rule.
+- Further improvements are optional additions on top of this rule. The first
+  one: Activity resolves launchers (`sudo`, `doas`, `env`, ...) and
+  interpreters (`node`, `python*`, ...) through the foreground process's
+  argv, so `node .../codex` is `codex` and `doas emerge` is `emerge`.

@@ -89,6 +89,11 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 
 - **Activity** 是 `pane_current_command`，转小写后去掉
   `-coding-agent` 后缀（所以 `pi-coding-agent` 会变成 `pi`）。
+  如果这个命令是启动器（`sudo`、`doas`、`env`、`nice`、`timeout`、
+  `systemd-run` 等）或解释器（`node`、`bun`、`deno`、`python*`、`ruby`、
+  `perl`），会读取前台进程的 argv 并改用真正运行的程序：`doas emerge -a`
+  变成 `emerge`，`node .../bin/codex` 变成 `codex`，`python3 -m http.server`
+  变成 `http.server`。没有脚本的解释器（REPL、`-e`/`-c`）保留原名。
 - **Workspace** 取以下规则中第一个适用的：
   1. 如果是 `ssh` 或 `mosh`，从 pane 标题里解析出的远程主机名。
   2. **会话容器规则。** 如果 `#{session_path}` 的目录名与 tmux 会话同名，且面板路径就是该目录或在其下，就用会话名。

@@ -12,7 +12,9 @@ _Avoid_: Generated string
 
 **Activity**:
 The foreground program of a Window's active pane: `pane_current_command`,
-lower-cased, with a `-coding-agent` suffix removed. It is a fact about what
+lower-cased, with a `-coding-agent` suffix removed, and resolved through
+launchers and interpreters to the program they run (`doas emerge` is
+`emerge`, `node .../codex` is `codex`). It is a fact about what
 is currently running, not a description of the work.
 _Avoid_: Command, task, current step
 
