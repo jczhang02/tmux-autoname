@@ -208,7 +208,19 @@ do_sync() {
     return 0
   fi
 
+  # A just-created pane briefly reports pane_current_command as "tmux"
+  # itself (or empty), before the shell it execs has taken over - a race
+  # between this hook firing and that fork/exec completing. Since no hook
+  # fires again once the shell settles, naming the window from that
+  # placeholder here would stick forever. Retry a few times first; this
+  # normally resolves within a couple of iterations.
+  tries=0
   pcmd=$(pane_field "$active_pane" pane_current_command)
+  while [ "$tries" -lt 10 ] && { [ -z "$pcmd" ] || [ "$pcmd" = "tmux" ]; }; do
+    sleep 0.05
+    pcmd=$(pane_field "$active_pane" pane_current_command)
+    tries=$((tries + 1))
+  done
   pane_title=$(pane_field "$active_pane" pane_title)
   cwd=$(pane_field "$active_pane" pane_current_path)
   session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""
