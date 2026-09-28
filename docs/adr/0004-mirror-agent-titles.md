@@ -1,6 +1,7 @@
 # Mirror agent-generated titles instead of inferring Tasks
 
-Status: Accepted. Date: 2026-09-24. Supersedes
+Status: Superseded by [ADR 0005](./0005-restore-deterministic-naming.md).
+Date: 2026-09-24. Supersedes
 [ADR 0001](./0001-stable-window-work-labels.md),
 [ADR 0002](./0002-work-label-inference-policy.md), and
 [ADR 0003](./0003-work-label-display-and-migration.md) where they conflict.

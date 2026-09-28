@@ -1,8 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
-Fixes from dogfooding 0.6.0 against real `claude`/`codex`/`pi` on tmux 3.6a:
+**Breaking change:** all AI/agent-title behaviour from 0.6.0 is removed.
+See [docs/adr/0005-restore-deterministic-naming.md](docs/adr/0005-restore-deterministic-naming.md)
+for the rationale.
+
+- The window name is now `<activity>:<workspace>[/<area>]`, the same
+  deterministic rule the pre-0.6 TypeScript version used, computed from
+  `pane_current_command`, the pane's cwd, and the session - no agent
+  titles, no mirroring, no normalisation of agent-specific title formats.
+- `tmux-autoname set`, `clear`, the Pin, the sticky Task, the fixed
+  Workspace, and `@tmux-autoname-agents`/`@tmux-autoname-max-width`/
+  `@tmux-autoname-key-set`/`@tmux-autoname-key-clear`/`@tmux-autoname-key-pick`
+  are all gone, along with the `pane-title-changed` hook,
+  `@tmux-autoname-seen`, and `integrations/pi/session-title.ts`. `sync`,
+  `auto`, and `status` remain; Manual Name precedence via
+  `@tmux-autoname-applied`, restoring auto-naming with `auto` or
+  `tmux rename-window ""`, and migration from the pre-0.6 daemon's
+  per-window state are all kept working.
+- Added `@tmux-autoname-area-depth` (default `1`), which caps the Area to
+  its first path segment; set it to `0` for the original, unlimited
+  relative-path Area. This is a new addition on top of the ported rule,
+  not part of the original TypeScript naming logic.
+- Added an `after-kill-pane` hook (syncing the window that remains, not
+  the killed pane's now-gone window) and an optional
+  `@tmux-autoname-key-auto` binding that runs `auto` on the current window.
+- Added `integrations/tmux-autoname.zsh`, an optional but recommended zsh
+  integration: tmux has no hook for a foreground-program or `cwd` change,
+  so without it, naming only updates on tmux's own window/pane/session
+  events. Source it from `.zshrc` to also sync (backgrounded, disowned)
+  right after a command starts, right before the next prompt, and on `cd`.
+
+Also carries these fixes, made during 0.6.0 dogfooding against real
+`claude`/`codex`/`pi` on tmux 3.6a, whose underlying agent-title code this
+release now removes wholesale:
 
 - The loader no longer picks up a `TMUX_AUTONAME_BIN` inherited from the
   process environment (an old 0.5 install used to `export` it), which could

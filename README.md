@@ -4,36 +4,38 @@ English | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-tmux-autoname mirrors the title your coding agent already gives its own
-work onto the tmux window name. It makes no model calls, captures no
-pane text, and needs no API key: Claude Code, codex, and pi each set a
-terminal title through OSC, tmux already records it as `pane_title`, and
-this plugin copies it into the window name.
+tmux-autoname names tmux windows deterministically from what is actually
+running and where: no model calls, no screen capture, no API key, and no
+agent-title mirroring.
 
 ```text
-tmux-autoname/Mirror agent titles instead of inferring them
-partjobs/查看当前工作情况
-website/fix mobile navigation
+claude:tmux-autoname
+zsh:partjobs/patent-value-identification
+codex:partjobs/patent-value-identification
+ssh:gentoo-box
 ```
 
-The window name is `<workspace>/<title>`, or just `<workspace>` when no
-recognised agent has reported a title yet. See
-[docs/adr/0004-mirror-agent-titles.md](docs/adr/0004-mirror-agent-titles.md)
+The window name is `<activity>:<workspace>[/<area>]`. See
+[docs/adr/0005-restore-deterministic-naming.md](docs/adr/0005-restore-deterministic-naming.md)
 for the full design rationale.
 
 ## Why this exists
 
 Earlier versions of this plugin inferred a task from screen text with an
-LLM. That required a config file, an API key, a resident daemon, and a
-Bun build step, and the inferred name often described the current step
-rather than the goal. Agents already name their own work; this version
-just reads it.
+LLM, then a later version mirrored the title a coding agent already sets
+for itself. Both were dropped: inferred tasks described the current step
+rather than the goal, and agent titles were mostly in whatever language
+the agent used, changed with pane focus, and made windows in the same
+session indistinguishable once the Area was gone. This version restores
+the deterministic, local rule the maintainer actually used every day
+before either of those.
 
 ## Requirements
 
 - tmux 3.3 or newer
 - POSIX `sh` (the default on Linux and macOS)
-- `git`, optional, for the Workspace name
+- `git`, optional, for the Git Workspace candidate
+- `zsh`, optional, for the recommended `integrations/tmux-autoname.zsh`
 
 No build step and no runtime dependency beyond tmux itself.
 
@@ -82,75 +84,64 @@ set -g @tmux-autoname-bin '/path/to/custom/tmux-autoname'
 run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
 ```
 
-## Agents supported
+## Recommended: the zsh integration
 
-| Agent | `pane_current_command` | Raw title example | Normalised Task |
-|---|---|---|---|
-| Claude Code | `claude` | `✳ Worktree review` | `Worktree review` |
-| codex | `codex` | `查看当前工作情况 \| bllc-reproduction` | `查看当前工作情况` |
-| pi | `pi` | `π - reviewer - myproj` | `reviewer` |
+tmux has no hook that fires when the foreground program changes or the
+shell `cd`s. Without help, `tmux-autoname` only recomputes a window's name
+on tmux's own structural events - a new window, a pane gaining focus, a
+split, a new session, a client attaching. That means the name can lag
+behind reality for as long as you stay in the same pane: switching from
+`zsh` to `claude` in place, or `cd`-ing into a different project, won't be
+reflected until something else nudges tmux.
 
-A placeholder title - Claude Code's `Claude Code`, codex before it sets
-a thread title, or an unnamed pi session (`π - <cwd>` with no session
-name) - counts as no title, and the window keeps showing only its
-Workspace. Only the Window's active pane and, if different, the pane
-whose title just changed are considered; when several agent panes share
-a Window the active pane wins. Once a Task is recorded it sticks to the
-Window - it survives the agent exiting and is only replaced by a new
-meaningful title from an agent in that Window.
+`integrations/tmux-autoname.zsh` closes that gap and is the recommended
+way to run this plugin day to day. Source it from `~/.zshrc`:
 
-Add or remove recognised commands with `@tmux-autoname-agents` (default
-`claude codex pi`).
+```sh
+source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
+```
 
-## pi session names
+It hooks `preexec` (sync shortly after a command starts), `precmd` (sync
+right before the next prompt), and `chpwd` (sync on `cd`), every one of
+them backgrounded and disowned so it never slows down your prompt or
+prints a job-control message. It resolves the binary from
+`$TMUX_AUTONAME_BIN` (which the loader exports for you) or falls back to
+`tmux-autoname` on `$PATH`.
 
-pi shows `π - <cwd>` until a session is named with `/name` or by an
-extension. `integrations/pi/session-title.ts` closes that gap: after the
-first agent turn, if the session still has no name, it asks the current
-model for a short title of the user's first message and calls
-`pi.setSessionName()`. It fails silently and never blocks a turn.
+## Naming rule
 
-Install it by pointing pi at the file, e.g. with `-e
-~/.tmux/plugins/tmux-autoname/integrations/pi/session-title.ts` or by
-adding it to your pi config's extensions list.
-
-## Workspace
-
-The Workspace is computed once and then fixed for the life of the
-window (until `clear`):
-
-1. **Session-container rule.** If `#{session_path}`'s basename equals the
-   tmux session name, and the pane's path is that directory or under it,
-   use the session name.
-2. **Git repository.** Otherwise, the basename of the main git
-   repository (`git rev-parse --path-format=absolute --git-common-dir`).
-   A worktree maps to its main repository.
-3. **Directory.** Otherwise, the basename of the current directory.
-   `$HOME` is shown as `~`.
-
-Before any Task is recorded, the Workspace is recomputed on every sync
-and simply follows the pane's current path.
+- **Activity** is `pane_current_command`, lower-cased, with a
+  `-coding-agent` suffix stripped (so `pi-coding-agent` becomes `pi`).
+- **Workspace** is the first of these that applies:
+  1. For `ssh` or `mosh`, the remote host parsed out of the pane title.
+  2. **Session container.** If `#{session_path}`'s basename equals the
+     tmux session name, and the pane's path is that directory or under
+     it, use the session name.
+  3. **Git repository.** Otherwise, the basename of
+     `git rev-parse --show-toplevel`.
+  4. **Session name.** Otherwise, the session name itself.
+- **Area** is the pane's path relative to the winning Workspace's root,
+  when the pane is strictly under that root (never `..`, never emitted
+  when there is no root, e.g. the `ssh`/`mosh` candidate). It is capped to
+  its first `@tmux-autoname-area-depth` path segments (default `1`); set
+  it to `0` for the full, unlimited relative path.
 
 ## Commands
 
 ```
 tmux-autoname sync [-t pane_or_window]
-tmux-autoname set [-t window] <title...>
-tmux-autoname clear [-t window]
 tmux-autoname auto [-t window]
 tmux-autoname status [-t window]
 tmux-autoname help
 ```
 
-- `sync` recomputes a window's name. Hooks call this for you; you
+- `sync` recomputes the name of the window a pane or window id belongs
+  to, from that window's currently ACTIVE pane - not the pane you passed,
+  if they differ. Hooks (and the zsh integration) call this for you; you
   normally don't need to.
-- `set` pins a title that agent titles cannot replace, e.g.
-  `tmux-autoname set Reviewing the payments PR`.
-- `clear` drops the pin, the sticky agent title, and the fixed
-  Workspace, returning the window to a Workspace-only name.
 - `auto` forgets a manual `tmux rename-window` and re-syncs immediately.
-- `status` prints the window's Workspace, title source, sticky title,
-  pin, full label, and whether the name was manually overridden.
+- `status` prints the window's current name, the name last applied by
+  `sync`, and whether it's been manually overridden.
 
 A user rename (tmux's own `prefix` + <kbd>,</kbd>, or `rename-window`)
 takes precedence until you run `tmux-autoname auto` or rename the window
@@ -161,37 +152,34 @@ naming.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `@tmux-autoname-agents` | `claude codex pi` | Space-separated `pane_current_command` values that contribute titles |
-| `@tmux-autoname-max-width` | `32` | Display cells before the window name is truncated with `…` |
+| `@tmux-autoname-area-depth` | `1` | Path segments of the Area to keep; `0` for the full relative path |
 | `@tmux-autoname-bin` | unset | Path to the `tmux-autoname` binary to use, if not the one in this checkout - must be set before the plugin loads |
-| `@tmux-autoname-key-set` | unset | Key, bound in the `prefix` table, that prompts for a pin, prefilled with the current pin or (if unset) the sticky agent title |
-| `@tmux-autoname-key-clear` | unset | Key that clears the current window |
-| `@tmux-autoname-key-pick` | unset | Key that opens `choose-tree` showing full labels |
+| `@tmux-autoname-key-auto` | unset | Key, bound in the `prefix` table, that runs `auto` on the current window |
 
 Set these before the plugin loads:
 
 ```tmux
-set -g @tmux-autoname-max-width 40
-set -g @tmux-autoname-key-set 'M-r'
-set -g @tmux-autoname-key-clear 'M-c'
-set -g @tmux-autoname-key-pick 'M-p'
+set -g @tmux-autoname-area-depth 0
+set -g @tmux-autoname-key-auto 'M-a'
 ```
 
-The full, untruncated label is always available as
-`#{@tmux-autoname-label}`, for use in your own `window-status-format`.
+## Upgrading from 0.6 and earlier
 
-## Upgrading from 0.5 and earlier
+0.7 removes every AI/agent-title feature 0.6 added: `set`, `clear`, the
+Pin, the sticky Task, the fixed Workspace, `@tmux-autoname-agents`,
+`@tmux-autoname-max-width`, the `-key-set`/`-key-clear`/`-key-pick`
+bindings, the `pane-title-changed` hook, and
+`integrations/pi/session-title.ts`. Naming is deterministic again; see
+[docs/adr/0005-restore-deterministic-naming.md](docs/adr/0005-restore-deterministic-naming.md).
+Loading the new `tmux-autoname.tmux` migrates a prior install
+automatically: it stops any lingering pre-0.6 daemon, overwrites the old
+indexed hooks, removes the badge fragment 0.5 and earlier appended to your
+`window-status-format`/`window-status-current-format`, and unsets all
+obsolete global and per-window options from both the pre-0.6 daemon and
+0.6 itself.
 
-0.6 removes the TypeScript/Bun runtime, the inference daemon, the config
-file, and the window-tab badge entirely - there is nothing to build and
-nothing to configure. Loading the new `tmux-autoname.tmux` migrates a
-prior install automatically: it stops the old daemon, overwrites the old
-indexed hooks, removes the badge fragment it had appended to your
-`window-status-format`/`window-status-current-format`, and unsets its
-obsolete global options.
-
-It also migrates every window's old per-window state
-(`@tmux-autoname-state`, base64-encoded JSON left by the daemon, and
+It also migrates every window's old per-window state left by the pre-0.6
+daemon (`@tmux-autoname-state`, base64-encoded JSON, and
 `@tmux-autoname-badge`): a window the old daemon had in manual mode is kept
 manual (sync will never rename it), one it had in automatic mode is handed
 to the new plugin to name from scratch, and both options are then unset. A
@@ -204,15 +192,11 @@ it isn't sure about. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## Limits
 
-- Naming quality now equals the agent's own title quality. A window
-  without a recognised agent shows only its Workspace.
-- Claude Code keeps its first-topic title, which can lag a long
-  session's current focus; `tmux-autoname set` or the agent's own
-  rename command fixes that.
-- Only `claude`, `codex`, and `pi` are recognised out of the box; other
-  tools that set a terminal title can be added via `@tmux-autoname-agents`
-  if their title format needs no special normalisation, or need a small
-  patch to `normalize_title()` in `bin/tmux-autoname` if it does.
+- Without the zsh integration, the Activity and Area only update on
+  tmux's own window/pane/session events, not on a foreground-command
+  change or `cd` inside the same pane.
+- Only `git` is consulted for the Workspace; other version-control
+  systems fall back to the session name or the directory basename.
 
 ## Development and verification
 
@@ -222,6 +206,6 @@ sh test/run.sh
 ```
 
 `test/run.sh` starts real, isolated tmux servers (`tmux -L
-tmux-autoname-test-*`) and drives them with fake `claude`/`codex`/`pi`
-processes that emit real OSC title sequences, so it exercises the actual
-hooks and format regexes, not a reimplementation of them.
+tmux-autoname-test-*`) and drives them with fake processes exec'd under
+the names it needs to test, so it exercises the actual hooks, not a
+reimplementation of them.

@@ -24,8 +24,7 @@ Those names came from the local, non-AI part of the 0.4/0.5 naming.
 is the 0.4 rule with the Task always empty.
 
 - **Activity** is the foreground program of the active pane. It is
-  lower-cased, a `-coding-agent` suffix is removed, and `systemd-run` resolves
-  to the executable after `--`.
+  lower-cased and a `-coding-agent` suffix is removed.
 - **Workspace** is the first of these that applies:
   1. For `ssh` or `mosh`, the remote host parsed from the pane title.
   2. The session container: when the basename of `session_path` equals the
@@ -34,7 +33,12 @@ is the 0.4 rule with the Task always empty.
   3. The basename of `git rev-parse --show-toplevel`.
   4. The session name.
 - **Area** is the pane path relative to the chosen Workspace's root. It is
-  omitted when the path is the root itself or lies outside it.
+  omitted when the path is the root itself or lies outside it. It is
+  additionally capped to its first `@tmux-autoname-area-depth` path segments
+  (default 1; 0 keeps it in full). This depth limit is not part of the
+  original 0.4 rule - it is a new addition made when porting it here,
+  because the maintainer found a multi-segment Area noisier day to day than
+  the original TypeScript version ever produced.
 
 **No AI.** No model calls, no API keys, no screen capture, and no
 agent-title mirroring. Everything from ADR 0004 that depended on agent titles
