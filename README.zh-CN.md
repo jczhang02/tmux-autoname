@@ -102,6 +102,7 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 - **Area** 是面板路径相对于最终选中的 Workspace 根目录的部分，仅当面板路径严格位于该根目录之下时才会出现（绝不会出现 `..`，在没有根目录的候选项——例如 `ssh`/`mosh`——上也不会出现）。它会被截断为前
   `@tmux-autoname-area-depth` 段路径（默认 `1`）；设为 `0`
   则保留完整的相对路径。
+- 设置 `@tmux-autoname-omit-session on` 后, 与会话同名的 Workspace 会被省略, 因为会话名已经说明了它: `claude` 而不是 `claude:partjobs`, `zsh/patent-value-identification` 而不是 `zsh:partjobs/patent-value-identification`. Area 保留斜杠, 以便和 Workspace 区分; 其他 Workspace 不受影响.
 
 ## 命令
 
@@ -125,6 +126,7 @@ tmux-autoname help
 | `@tmux-autoname-area-depth` | `1` | 保留的 Area 路径段数；`0` 表示保留完整相对路径 |
 | `@tmux-autoname-bin` | 未设置 | 要使用的 `tmux-autoname` 二进制路径，如果不是当前 checkout 里那个——必须在插件加载之前设置 |
 | `@tmux-autoname-key-auto` | 未设置 | 绑定在 `prefix` 键表中、对当前窗口执行 `auto` 的按键 |
+| `@tmux-autoname-omit-session` | `off` | 设为 `on` 时省略与会话同名的 Workspace (见命名规则) |
 
 在插件加载之前设置：
 

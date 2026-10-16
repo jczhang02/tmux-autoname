@@ -33,6 +33,12 @@ path segments (default 1); it is omitted entirely when there is no root to
 measure against, or the pane's path is the root itself.
 _Avoid_: Subdirectory, path, slug
 
+**Omitted Workspace**:
+With `@tmux-autoname-omit-session on`, a Workspace equal to the session name
+is left out of the rendered name, which becomes `<activity>[/<area>]`. The
+Name Record is the same; only its rendering is shorter.
+_Avoid_: Hidden session, short name
+
 **Window**:
 The tmux container to which a Name Record belongs. Its Activity, Workspace,
 and Area are always computed from its currently ACTIVE pane, not any

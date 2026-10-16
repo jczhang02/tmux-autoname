@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New option `@tmux-autoname-omit-session` (default `off`): `on` leaves out
+  a Workspace equal to the session name, so `claude:partjobs` becomes
+  `claude` and `zsh:partjobs/src` becomes `zsh/src`.
+
 - Activity resolves launchers (`sudo`, `doas`, `env`, `nice`, `timeout`,
   `systemd-run`, ...) and interpreters (`node`, `bun`, `deno`, `python*`,
   `ruby`, `perl`) to the program they run, from the foreground process's

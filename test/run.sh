@@ -198,6 +198,39 @@ test_session_container_at_root_no_area() {
   rm -rf "$container_dir"
 }
 
+test_omit_session_workspace() {
+  container_dir=$(mktemp -d)
+  proj_dir="$container_dir/partjobs"
+  repo_dir="$container_dir/bar"
+  mkdir -p "$proj_dir/patent-value-identification" "$repo_dir/src"
+  (cd "$repo_dir" && git init -q && git commit -q --allow-empty -m init)
+  TESTN=$((TESTN + 1))
+  SOCK="tmux-autoname-test-$$-$TESTN"
+  SERVERS="$SERVERS $SOCK"
+  tmux -L "$SOCK" -f /dev/null new-session -d -s partjobs -x 200 -y 50 -c "$proj_dir"
+  t set-option -g @tmux-autoname-omit-session on
+  load_plugin
+  start_fake claude partjobs:0
+  sync_now partjobs:0
+  assert_eq "omit-session: workspace equal to the session is dropped" \
+    '#{window_name}' 'claude' 'partjobs:0'
+
+  t new-window -t partjobs: -c "$proj_dir/patent-value-identification"
+  start_fake zsh partjobs:1
+  sync_now partjobs:1
+  assert_eq "omit-session: the area stays, after a slash" \
+    '#{window_name}' 'zsh/patent-value-identification' 'partjobs:1'
+
+  t new-window -t partjobs: -c "$repo_dir/src"
+  start_fake nvim partjobs:2
+  sync_now partjobs:2
+  assert_eq "omit-session: a workspace other than the session stays" \
+    '#{window_name}' 'nvim:bar/src' 'partjobs:2'
+
+  stop_server
+  rm -rf "$container_dir"
+}
+
 test_git_workspace_wins_over_session_name() {
   outer_dir=$(mktemp -d)
   session_dir="$outer_dir/foo"
@@ -598,6 +631,7 @@ run_all() {
   if command -v git >/dev/null 2>&1; then
     test_git_worktree_area_depth_default
     test_area_depth_unlimited
+    test_omit_session_workspace
   fi
   test_ssh_workspace_from_title
   test_pi_coding_agent_activity_stripped

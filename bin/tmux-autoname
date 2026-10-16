@@ -380,8 +380,18 @@ do_sync() {
     area=$(compute_area "$cwd" "$root" "$area_depth")
   fi
 
-  if [ -n "$area" ]; then
+  # @tmux-autoname-omit-session: the session name already says which
+  # Workspace this is, so drop it: "claude", "zsh/src". The Area keeps its
+  # slash, which tells it apart from a Workspace.
+  if [ "$(gopt @tmux-autoname-omit-session off)" = on ] &&
+    [ -n "$session" ] && [ "$workspace" = "$session" ]; then
+    workspace=""
+  fi
+
+  if [ -n "$area" ] && [ -n "$workspace" ]; then
     raw_name="$activity:$workspace/$area"
+  elif [ -n "$area" ]; then
+    raw_name="$activity/$area"
   else
     raw_name="$activity:$workspace"
   fi

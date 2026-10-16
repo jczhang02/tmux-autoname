@@ -132,6 +132,11 @@ prints a job-control message. It resolves the binary from
   when there is no root, e.g. the `ssh`/`mosh` candidate). It is capped to
   its first `@tmux-autoname-area-depth` path segments (default `1`); set
   it to `0` for the full, unlimited relative path.
+- With `@tmux-autoname-omit-session on`, a Workspace equal to the session
+  name is left out, since the session name already shows it: `claude`
+  instead of `claude:partjobs`, `zsh/patent-value-identification` instead
+  of `zsh:partjobs/patent-value-identification`. The Area keeps its slash,
+  which tells it apart from a Workspace; other Workspaces stay as they are.
 
 ## Commands
 
@@ -162,6 +167,7 @@ naming.
 | `@tmux-autoname-area-depth` | `1` | Path segments of the Area to keep; `0` for the full relative path |
 | `@tmux-autoname-bin` | unset | Path to the `tmux-autoname` binary to use, if not the one in this checkout - must be set before the plugin loads |
 | `@tmux-autoname-key-auto` | unset | Key, bound in the `prefix` table, that runs `auto` on the current window |
+| `@tmux-autoname-omit-session` | `off` | `on` leaves out a Workspace equal to the session name (see Naming rule) |
 
 Set these before the plugin loads:
 
