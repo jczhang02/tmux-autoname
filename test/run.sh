@@ -60,8 +60,15 @@ trap cleanup EXIT INT TERM
 # Fake program: reads "title:<text>" lines from stdin and re-emits the title
 # via OSC 0, or exits on "quit". pane_current_command reports argv[0] of
 # the pane's foreground process, so tests run this as
-# `exec -a NAME sh -c '. plain' [ARGS]`: argv is then
+# `exec as NAME sh -c '. plain' [ARGS]`: argv is then
 # `NAME -c '. plain' ARGS`, which also lets ssh tests choose their argv.
+# `as` stands in for `exec -a`, which dash does not have.
+cat >"$FAKE_DIR/as" <<'SCRIPT'
+#!/bin/sh
+# as NAME PROG [ARGS]: exec PROG with argv[0] set to NAME.
+exec perl -e 'my $n = shift; my $p = shift; exec {$p} $n, @ARGV or die "$p: $!\n"' -- "$@"
+SCRIPT
+chmod +x "$FAKE_DIR/as"
 cat >"$FAKE_DIR/plain" <<'SCRIPT'
 while IFS= read -r line; do
   case "$line" in
@@ -132,7 +139,7 @@ wait_cmd() {
 start_fake() {
   # $1 = name to exec as, $2 = target pane (default: w), $3 = extra argv
   target=${2:-w}
-  t send-keys -t "$target" "exec -a $1 sh -c '. $FAKE_DIR/plain'${3:+ $3}" Enter
+  t send-keys -t "$target" "exec $FAKE_DIR/as $1 sh -c '. $FAKE_DIR/plain'${3:+ $3}" Enter
   wait_cmd "$1" "$target"
 }
 
@@ -140,7 +147,7 @@ start_child() {
   # Like start_fake, but in a subshell, so "quit" returns to the pane's sh.
   # $1 = name, $2 = target pane (default: w)
   target=${2:-w}
-  t send-keys -t "$target" "(exec -a $1 sh -c '. $FAKE_DIR/plain')" Enter
+  t send-keys -t "$target" "(exec $FAKE_DIR/as $1 sh -c '. $FAKE_DIR/plain')" Enter
   wait_cmd "$1" "$target"
 }
 
@@ -160,6 +167,12 @@ set_title() {
 run_bin() {
   # Run the binary inside the test server. $@ = arguments (no quotes)
   t run-shell "'$BIN' $*" 2>/dev/null || true
+}
+
+bin_out() {
+  # Run the binary against the test server and print its output. tmux 3.4
+  # does not return run-shell output to a detached client.
+  TMUX="$(sock_path),0,0" "$BIN" "$@" 2>/dev/null || true
 }
 
 sync_now() {
@@ -487,7 +500,7 @@ test_node_script_resolves_to_program() {
   mkdir -p "$FAKE_DIR/pkg/bin"
   # argv becomes "node -s <dir>/pkg/bin/codex", like a node CLI shim;
   # the interactive sh keeps the pane's foreground process alive.
-  t send-keys -t w "exec -a node sh -s $FAKE_DIR/pkg/bin/codex" Enter
+  t send-keys -t w "exec $FAKE_DIR/as node sh -s $FAKE_DIR/pkg/bin/codex" Enter
   wait_cmd node
   sync_now
   assert_name "node running a CLI script resolves to the script name" 'codex'
@@ -499,7 +512,7 @@ test_launcher_resolves_to_command() {
   start_server
   load_plugin
   # argv becomes "doas -s emerge -auDvN", as for "doas emerge -auDvN".
-  t send-keys -t w "exec -a doas sh -s emerge -auDvN" Enter
+  t send-keys -t w "exec $FAKE_DIR/as doas sh -s emerge -auDvN" Enter
   wait_cmd doas
   sync_now
   assert_name "doas launching emerge resolves to emerge" 'emerge'
@@ -698,7 +711,7 @@ test_break_pane_syncs_new_window() {
 # shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 status_has() {
   # $1 = target window, $2 = exact line wanted in its status output
-  out=$(run_bin status -t "$1")
+  out=$(bin_out status -t "$1")
   has_line "$out" "$2"
 }
 
@@ -907,14 +920,14 @@ test_status_output() {
   start_fake claude
   win=$(win_id)
   sync_now "$win"
-  out=$(run_bin status -t "$win")
+  out=$(bin_out status -t "$win")
   check "status: name line" has_line "$out" 'name: claude'
   check "status: applied line" has_line "$out" 'applied: claude'
   check "status: manual line, automatic window" has_line "$out" 'manual: no'
   check "status: activity line" has_line "$out" 'activity: claude'
   check "status: icon line" has_line "$out" "icon: $ICON_CLAUDE"
   t rename-window -t w pinned
-  out=$(run_bin status -t "$win")
+  out=$(bin_out status -t "$win")
   check "status: name line after a manual rename" has_line "$out" 'name: pinned'
   check "status: applied line keeps the automatic name" has_line "$out" 'applied: claude'
   check "status: manual line, manual window" has_line "$out" 'manual: yes'
