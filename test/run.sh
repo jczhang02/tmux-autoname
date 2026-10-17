@@ -743,6 +743,79 @@ test_tricky_names() {
   stop_server
 }
 
+wrapped_sync() {
+  # Run "sync -t w" with a tmux wrapper first in PATH. $1 = sh code the
+  # wrapper runs before each call, with "$@" set to that call's arguments
+  # and $real set to the real tmux on the test socket.
+  wrap="$WORK/wrapped-$SOCK"
+  mkdir -p "$wrap"
+  {
+    printf '#!/bin/sh\n'
+    printf 'real="%s -S %s"\n' "$REAL_TMUX" "$(sock_path)"
+    printf '%s\n' "$1"
+    # shellcheck disable=SC2016
+    printf 'exec $real "$@"\n'
+  } >"$wrap/tmux"
+  chmod +x "$wrap/tmux"
+  TMUX="$(sock_path),0,0" PATH="$wrap:$PATH" "$BIN" sync -t w \
+    >/dev/null 2>&1 || true
+}
+
+test_rename_during_sync_is_kept() {
+  start_server
+  load_plugin
+  start_fake claude
+  sync_now
+  gset @tmux-autoname-omit-session off
+  # The user renames the window after sync read it, before sync writes.
+  # shellcheck disable=SC2016
+  wrapped_sync 'case " $* " in *" if-shell "*) $real rename-window -t w mine ;; esac'
+  assert_name "a rename made during a sync is kept" 'mine'
+  check "a rename made during a sync is a Manual Name" \
+    status_has w 'manual: yes'
+  stop_server
+}
+
+test_sync_retries_after_another_sync() {
+  start_server
+  load_plugin
+  start_fake claude
+  sync_now
+  gset @tmux-autoname-omit-session off
+  mark="$WORK/other-sync.mark"
+  rm -f "$mark"
+  # Once, just before the write, another sync stores an older name.
+  wrapped_sync "case \" \$* \" in *' if-shell '*)
+  [ -e '$mark' ] || { : >'$mark'; \$real rename-window -t w sh:w \; \
+    set-option -wq -t w @tmux-autoname-applied sh:w; } ;; esac"
+  assert_name "a sync that loses to another sync reads again and retries" \
+    'claude:w'
+  stop_server
+}
+
+test_backslash_name_not_renamed_again() {
+  base=$(fixture)
+  mkdir -p "$base/box/b\\slash"
+  new_server box "$base/box"
+  load_plugin
+  t send-keys -t box "cd 'b\\slash'" Enter
+  wait_for '#{b:pane_current_path}' 'b\slash' box || true
+  sync_now box
+  log="$WORK/backslash.log"
+  : >"$log"
+  # shellcheck disable=SC2016
+  wrapped_sync "printf '%s\\n' \"\$*\" >>'$log'"
+  check "a name with a backslash is not renamed on every sync" \
+    not_in_log rename-window "$log"
+  stop_server
+}
+
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
+not_in_log() {
+  # $1 = text, $2 = file
+  ! grep -qF -- "$1" "$2"
+}
+
 test_no_utf8_locale() {
   base=$(fixture)
   mkdir -p "$base/项目"
@@ -967,6 +1040,9 @@ run_all() {
   test_after_kill_pane_syncs_window
   test_break_pane_syncs_new_window
   test_tricky_names
+  test_rename_during_sync_is_kept
+  test_sync_retries_after_another_sync
+  test_backslash_name_not_renamed_again
   if command -v git >/dev/null 2>&1; then
     test_no_utf8_locale
   fi

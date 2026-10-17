@@ -19,11 +19,12 @@ FIELDS="#{window_id}${NL}#{pane_id}${NL}#{pane_active}${NL}#{window_name}${NL}\
 #{pane_current_path}${NL}#{session_name}${NL}#{session_path}${NL}\
 #{@tmux-autoname-applied}${NL}#{@tmux-autoname-icon}${NL}\
 #{@tmux-autoname-area-depth}${NL}#{@tmux-autoname-omit-session}${NL}\
-#{@tmux-autoname-icons}${NL}#{@tmux-autoname-icon-default}${NL}."
+#{@tmux-autoname-icons}${NL}#{@tmux-autoname-icon-default}${NL}\
+#{@tmux-autoname-computed}${NL}."
 
 # Sets win pane pane_active name pcmd pane_pid title cwd session session_path
-# applied icon_cur depth omit icons icon_default from the lines of $1. Fails
-# unless there are exactly 17 lines (a value with a newline in it).
+# applied icon_cur depth omit icons icon_default computed from the lines of
+# $1. Fails unless there are exactly 18 lines (a value with a newline in it).
 assign_fields() {
   n=0
   while IFS= read -r line; do
@@ -34,12 +35,12 @@ assign_fields() {
       7) title=$line ;; 8) cwd=$line ;; 9) session=$line ;;
       10) session_path=$line ;; 11) applied=$line ;; 12) icon_cur=$line ;;
       13) depth=$line ;; 14) omit=$line ;; 15) icons=$line ;;
-      16) icon_default=$line ;;
+      16) icon_default=$line ;; 17) computed=$line ;;
     esac
   done <<EOF_FIELDS
 $1
 EOF_FIELDS
-  [ "$n" -eq 17 ]
+  [ "$n" -eq 18 ]
 }
 
 # Read the fields of the window's ACTIVE pane. $1 = target (may be empty).
@@ -377,12 +378,23 @@ batch_word() {
   esac
 }
 
+# $1 as a literal inside a tmux format: "#", "," and "}" escaped.
+fmt_lit() {
+  printf '%s' "$1" | sed -e 's/#/##/g' -e 's/,/#,/g' -e 's/}/#}/g'
+}
+
+# $1 as one double-quoted word of a tmux command string.
+cmd_word() {
+  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"$]/\\&/g')"
+}
+
 is_manual() {
   [ -n "$applied" ] && [ "$name" != "$applied" ]
 }
 
 do_sync() {
-  # $1 = target (pane, window, or empty for current)
+  # $1 = target (pane, window, or empty for current), $2 = retry count
+  retries=${2:-0}
   read_window "$1" || return 0
   resolve_activity
   icon=$(icon_for "$activity" "$icons" "$icon_default")
@@ -415,31 +427,44 @@ do_sync() {
       *[[:cntrl:]]*) newname=$(printf '%s' "$newname" | tr -d '[:cntrl:]') ;;
     esac
 
-    # rename-window format-expands its argument and tmux escapes some bytes
-    # when it stores a name, so record the stored #{window_name}, not
-    # $newname. If tmux rejects the rename, the rest of the batch does not
-    # run and the window does not turn into a Manual Name.
-    renamed=no
-    if [ "$newname" != "$name" ]; then
-      renamed=yes
-      case "$newname" in
-        *'#'*) newname=$(printf '%s' "$newname" | sed 's/#/##/g') ;;
-      esac
-      batch_word "$newname"
-      set -- "$@" rename-window -t "$win" -- "$v" ';'
+    # Writes that depend on the name, as one command string run by
+    # if-shell -F only while the name and applied are still what was read,
+    # so a rename made during this sync is never overwritten.
+    cmds=""
+    # tmux stores some bytes escaped ("\\" for "\"), so the stored name can
+    # differ from $newname; @tmux-autoname-computed remembers the latter.
+    if [ "$newname" != "$name" ] && [ "$newname" != "$computed" ]; then
+      # rename-window format-expands its argument.
+      esc=$(printf '%s' "$newname" | sed 's/#/##/g')
+      cmds="rename-window -t $win -- $(cmd_word "$esc") ;"
     fi
-    if [ "$renamed" = yes ] || [ -z "$applied" ]; then
-      set -- "$@" set-option -wqF -t "$win" @tmux-autoname-applied \
-        '#{window_name}' ';'
+    if [ "$newname" != "$computed" ]; then
+      cmds="$cmds set-option -wq -t $win @tmux-autoname-computed $(cmd_word "$newname") ;"
+    fi
+    # Record the stored #{window_name}, not $newname. If tmux rejects the
+    # rename, the rest does not run and the window does not turn manual.
+    if [ -n "$cmds" ] || [ -z "$applied" ]; then
+      cmds="$cmds set-option -wqF -t $win @tmux-autoname-applied '#{window_name}' ;"
     fi
     # The first time, turn tmux's automatic-rename off explicitly: when the
     # name already matches, no rename-window does it, and tmux's own rename
     # would later look like a Manual Name.
     [ -n "$applied" ] ||
-      set -- "$@" set-option -wq -t "$win" automatic-rename off ';'
+      cmds="$cmds set-option -wq -t $win automatic-rename off ;"
+    if [ -n "$cmds" ]; then
+      cond="#{&&:#{==:#{window_name},$(fmt_lit "$name")},#{==:#{@tmux-autoname-applied},$(fmt_lit "$applied")}}"
+      # If the window changed but is still automatic, another sync wrote
+      # it, perhaps from older data: read again and retry.
+      set -- "$@" if-shell -F -t "$win" "$cond" "${cmds% ;}" \
+        "if-shell -F -t $win '#{==:#{window_name},#{@tmux-autoname-applied}}' 'display-message -p retry'" ';'
+    fi
   fi
 
-  [ $# -eq 0 ] || tmux "$@" >/dev/null 2>&1 || true
+  [ $# -gt 0 ] || return 0
+  out=$(tmux "$@" 2>/dev/null) || out=""
+  if [ "$out" = retry ] && [ "$retries" -lt 3 ]; then
+    do_sync "$win" $((retries + 1))
+  fi
   return 0
 }
 
@@ -459,7 +484,8 @@ cmd_sync() {
 cmd_auto() {
   parse_target "$@"
   read_window "$target" || return 1
-  tmux set-option -wqu -t "$win" @tmux-autoname-applied 2>/dev/null || true
+  tmux set-option -wqu -t "$win" @tmux-autoname-applied \; \
+    set-option -wqu -t "$win" @tmux-autoname-computed 2>/dev/null || true
   do_sync "$win"
 }
 
