@@ -35,8 +35,8 @@ _Avoid_: Subdirectory, path, slug
 
 **Omitted Workspace**:
 With `@tmux-autoname-omit-session on`, a Workspace equal to the session name
-is left out of the rendered name, which becomes `<activity>[/<area>]`. The
-Name Record is the same; only its rendering is shorter.
+is left out of the rendered name, which becomes `<activity>[:<area>]`. On by
+default. The Name Record is the same; only its rendering is shorter.
 _Avoid_: Hidden session, short name
 
 **Window**:
@@ -53,8 +53,15 @@ _Avoid_: Project, workspace
 
 **Automatic Name**:
 The visible window name computed from a Name Record: `<activity>:<workspace>`,
-or `<activity>:<workspace>/<area>` when there is an Area.
+or `<activity>:<workspace>/<area>` when there is an Area. With an Omitted
+Workspace it is `<activity>:<area>`, or `<activity>` alone.
 _Avoid_: AI name
+
+**Icon**:
+A single glyph chosen from a Window's Activity and stored in the window option
+`@tmux-autoname-icon`, never in the window name. It is set on every sync,
+also for a Window with a Manual Name, so it always shows what runs there.
+_Avoid_: Badge, emoji
 
 **Manual Name**:
 A user-authored window name, set through tmux's own rename (`prefix` + `,`,

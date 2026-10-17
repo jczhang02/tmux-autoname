@@ -1,6 +1,7 @@
 # Restore the original deterministic naming, without AI
 
-Status: Accepted. Date: 2026-09-27. Supersedes
+Status: Superseded by [ADR 0006](./0006-rewrite-with-icons.md) where they conflict.
+Date: 2026-09-27. Supersedes
 [ADR 0004](./0004-mirror-agent-titles.md).
 
 ## Context
