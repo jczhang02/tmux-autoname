@@ -48,7 +48,7 @@ cd "$WORK"
 SERVERS=""
 SOCK=""
 
-# shellcheck disable=SC2329  # invoked indirectly via trap
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via trap
 cleanup() {
   for s in $SERVERS; do
     tmux -L "$s" kill-server >/dev/null 2>&1 || true
@@ -145,10 +145,9 @@ start_child() {
 }
 
 quit_child() {
-  # $1 = target pane (default: w)
-  target=${1:-w}
-  t send-keys -t "$target" quit Enter
-  wait_cmd sh "$target"
+  # Ends the child running in window w.
+  t send-keys -t w quit Enter
+  wait_cmd sh w
 }
 
 set_title() {
@@ -188,8 +187,8 @@ run_direct() {
 }
 
 win_id() {
-  # $1 = target (default: w)
-  t display-message -p -t "${1:-w}" '#{window_id}'
+  # Prints the id of window w.
+  t display-message -p -t w '#{window_id}'
 }
 
 wait_for() {
@@ -696,7 +695,7 @@ test_break_pane_syncs_new_window() {
 
 # --- Tricky names -----------------------------------------------------------
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 status_has() {
   # $1 = target window, $2 = exact line wanted in its status output
   out=$(run_bin status -t "$1")
@@ -798,7 +797,7 @@ test_loader_syncs_all_windows() {
   stop_server
 }
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 hook_has() {
   # $1 = hook name, $2 = text its [120] entry must contain. Window hooks
   # (window-pane-changed) are listed by -gw, the others by -g.
@@ -844,7 +843,7 @@ test_loader_quoted_path() {
   stop_server
 }
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 env_is_bin() {
   [ "$(t show-environment -g TMUX_AUTONAME_BIN 2>/dev/null)" = "TMUX_AUTONAME_BIN=$BIN" ]
 }
@@ -868,12 +867,12 @@ SCRIPT
   stop_server
 }
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 no_key_bound() {
   ! t list-keys 2>/dev/null | grep -q tmux-autoname
 }
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 key_bound_to_auto() {
   # $1 = key
   t list-keys 2>/dev/null | grep " $1 " | grep -q "tmux-autoname.* auto"
@@ -896,7 +895,7 @@ test_key_auto_binding() {
 
 # --- status -----------------------------------------------------------------
 
-# shellcheck disable=SC2329  # invoked indirectly via check
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
 has_line() {
   # $1 = text, $2 = exact line wanted
   printf '%s\n' "$1" | grep -qxF -- "$2"
