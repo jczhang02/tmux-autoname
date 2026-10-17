@@ -1,15 +1,53 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
 
-- New option `@tmux-autoname-omit-session` (default `off`): `on` leaves out
-  a Workspace equal to the session name, so `claude:partjobs` becomes
-  `claude` and `zsh:partjobs/src` becomes `zsh/src`.
+A from-scratch rewrite with per-window icons. See
+[docs/adr/0006-rewrite-with-icons.md](docs/adr/0006-rewrite-with-icons.md).
 
+**Breaking changes:**
+
+- The separator after the Activity is always `:`. The name is `A:W/R`,
+  `A:W`, `A:R` or `A`; with the Workspace omitted, the pre-release
+  `zsh/src` is now `zsh:src`.
+- `@tmux-autoname-omit-session` (new) defaults to `on`: a Workspace
+  equal to the session name is left out, so `claude:partjobs` becomes
+  `claude`. Set it to `off` for the 0.7 names.
+- `@tmux-autoname-bin` is removed. The loader always uses
+  `bin/tmux-autoname` of its own checkout and exports it as
+  `TMUX_AUTONAME_BIN` for the zsh integration.
+- All migration is removed: from 0.5, 0.6 and the pre-0.6 daemon (pid
+  cleanup, badge fragment removal, obsolete options, per-window state).
+  Old hooks at index `[120]` are overwritten; old options stay until the
+  tmux server restarts.
+
+**New:**
+
+- Icons. Every `sync` sets the window option `@tmux-autoname-icon` to a
+  glyph chosen from the Activity, also on a window with a Manual Name.
+  Show it with `#{@tmux-autoname-icon}` in `window-status-format` and
+  `window-status-current-format`; the plugin does not edit them. Match
+  order: `@tmux-autoname-icons` (whitespace-separated `pattern=icon`
+  pairs, sh `case` globs), then a built-in table, then
+  `@tmux-autoname-icon-default` (U+F018D).
+- `status` also prints `activity:` and `icon:`.
+- For `ssh` and `mosh`, the remote host is read from the foreground
+  process's argv; the pane title is the fallback, and is still used for
+  `mosh-client`.
 - Activity resolves launchers (`sudo`, `doas`, `env`, `nice`, `timeout`,
   `systemd-run`, ...) and interpreters (`node`, `bun`, `deno`, `python*`,
   `ruby`, `perl`) to the program they run, from the foreground process's
   argv: `node .../bin/codex` is now `codex`, `doas emerge` is `emerge`.
+- A `window-linked[120]` hook syncs a window made by `break-pane`.
+
+**Fixes:**
+
+- The zsh integration no longer lets the delayed `preexec` sync of a
+  command that ended within 0.3 s overwrite the prompt's sync.
+- A directory name with `#`, a trailing `;` or a control character no
+  longer turns the window into a Manual Name: the applied name is now
+  read back from tmux.
+- The hooks work from a checkout path with quotes, `$` or `#`.
 
 ## 0.7.0
 

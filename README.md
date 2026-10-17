@@ -4,40 +4,50 @@ English | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-tmux-autoname names tmux windows deterministically from what is actually
-running and where: no model calls, no screen capture, no API key, and no
-agent-title mirroring.
+tmux-autoname names tmux windows deterministically from what is running
+and where, and gives each window an icon for that program. No model calls,
+no screen capture, no API key, no daemon.
 
 ```text
-claude:tmux-autoname
-zsh:partjobs/patent-value-identification
-codex:partjobs/patent-value-identification
-ssh:gentoo-box
+claude:tmux-autoname                      Workspace differs from the session name
+zsh:partjobs/patent-value-identification  omit-session off
+claude:paxc-approx-dnn                    session partjobs, pane in ~/dev/partjobs/paxc-approx-dnn
+claude                                    session gig, pane at the session root
+ssh:gentoo-box                            remote host as Workspace
 ```
 
-The window name is `<activity>:<workspace>[/<area>]`. See
-[docs/adr/0005-restore-deterministic-naming.md](docs/adr/0005-restore-deterministic-naming.md)
-for the full design rationale.
+The name is built from the Activity `A`, the Workspace `W`, and the Area
+`R`:
+
+| Workspace | Area | Name |
+|---|---|---|
+| set | set | `A:W/R` |
+| set | empty | `A:W` |
+| empty | set | `A:R` |
+| empty | empty | `A` |
+
+The Workspace is empty when it equals the session name (see
+`@tmux-autoname-omit-session`). The design is recorded in
+[docs/adr/0006-rewrite-with-icons.md](docs/adr/0006-rewrite-with-icons.md);
+the terms are defined in [CONTEXT.md](CONTEXT.md).
 
 ## Why this exists
 
-Earlier versions of this plugin inferred a task from screen text with an
-LLM, then a later version mirrored the title a coding agent already sets
-for itself. Both were dropped: inferred tasks described the current step
-rather than the goal, and agent titles were mostly in whatever language
-the agent used, changed with pane focus, and made windows in the same
-session indistinguishable once the Area was gone. This version restores
-the deterministic, local rule the maintainer actually used every day
-before either of those.
+Earlier versions inferred a task from screen text with an LLM, then
+mirrored the title a coding agent sets for itself. Both were dropped:
+inferred tasks described the current step, not the goal, and agent titles
+changed with pane focus and made windows in one session look the same.
+This plugin uses a local, deterministic rule instead.
 
 ## Requirements
 
 - tmux 3.3 or newer
 - POSIX `sh` (the default on Linux and macOS)
-- `git`, optional, for the Git Workspace candidate
+- `git`, optional, for the Git Workspace rule
 - `zsh`, optional, for the recommended `integrations/tmux-autoname.zsh`
+- a [Nerd Font](https://www.nerdfonts.com/), optional, for the icons
 
-No build step and no runtime dependency beyond tmux itself.
+No build step and no runtime dependency beyond tmux.
 
 ## Install with TPM
 
@@ -45,7 +55,7 @@ No build step and no runtime dependency beyond tmux itself.
 set -g @plugin 'jczhang02/tmux-autoname'
 ```
 
-Press `prefix` + <kbd>I</kbd>. Nothing else to build or configure.
+Press `prefix` + <kbd>I</kbd>.
 
 ## Install manually
 
@@ -65,78 +75,128 @@ Then reload tmux:
 tmux source-file ~/.tmux.conf
 ```
 
-Add the plugin's `bin` directory to `PATH` if you want to call its
-commands by name instead of through `$TMUX_AUTONAME_BIN` (which the
-loader always sets for you):
+The loader always uses `bin/tmux-autoname` of its own checkout, and
+exports its path as `TMUX_AUTONAME_BIN` in the tmux global environment for
+the zsh integration. To call the commands by name, add the `bin` directory
+to `PATH`:
 
 ```sh
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
-The loader always resolves the binary to `bin/tmux-autoname` inside its
-own checkout - it never reads `$TMUX_AUTONAME_BIN` back from the process
-environment, so a shell that happens to have it set (e.g. from an old
-install) can't pin the server to a stale binary. To point at a different
-binary on purpose, set `@tmux-autoname-bin` *before* the plugin loads:
+## Show the icon
+
+The plugin sets the icon in the window option `@tmux-autoname-icon`. It
+never puts the icon into the window name and never edits your status
+formats, so add `#{@tmux-autoname-icon}` to both formats yourself:
 
 ```tmux
-set -g @tmux-autoname-bin '/path/to/custom/tmux-autoname'
-run-shell '~/.tmux/plugins/tmux-autoname/tmux-autoname.tmux'
+set -g window-status-format         '#I #{@tmux-autoname-icon} #W'
+set -g window-status-current-format '#I #{@tmux-autoname-icon} #W'
 ```
+
+If a theme plugin sets these formats, add the token to the theme's
+formats, or set the formats after the theme loads.
 
 ## Recommended: the zsh integration
 
-tmux has no hook that fires when the foreground program changes or the
-shell `cd`s. Without help, `tmux-autoname` only recomputes a window's name
-on tmux's own structural events - a new window, a pane gaining focus, a
-split, a new session, a client attaching. That means the name can lag
-behind reality for as long as you stay in the same pane: switching from
-`zsh` to `claude` in place, or `cd`-ing into a different project, won't be
-reflected until something else nudges tmux.
+tmux has no hook for a change of the foreground program or of the
+directory. Without help, a window is only synced on tmux's own events: a
+new window, a pane gaining focus, a split, a killed pane, a pane broken
+out to its own window, a new session, a client attaching. If you start `claude` in a shell, or `cd` into another
+project, the name and icon do not change until one of those events
+occurs.
 
-`integrations/tmux-autoname.zsh` closes that gap and is the recommended
-way to run this plugin day to day. Source it from `~/.zshrc`:
+`integrations/tmux-autoname.zsh` closes that gap. Source it from
+`~/.zshrc`:
 
 ```sh
 source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
-It hooks `preexec` (sync shortly after a command starts), `precmd` (sync
-right before the next prompt), and `chpwd` (sync on `cd`), every one of
-them backgrounded and disowned so it never slows down your prompt or
-prints a job-control message. It resolves the binary from
-`$TMUX_AUTONAME_BIN` (which the loader exports for you) or falls back to
-`tmux-autoname` on `$PATH`.
+It syncs 0.3 s after a command starts (`preexec`), before each prompt
+(`precmd`), and on `cd` (`chpwd`). Each sync runs in the background and is
+disowned, so it does not slow the prompt or print job-control messages.
+It uses `$TMUX_AUTONAME_BIN`, or `tmux-autoname` on `PATH`.
 
 ## Naming rule
 
-- **Activity** is `pane_current_command`, lower-cased, with a
-  `-coding-agent` suffix stripped (so `pi-coding-agent` becomes `pi`).
-  When that command is a launcher (`sudo`, `doas`, `env`, `nice`,
-  `timeout`, `systemd-run`, ...) or an interpreter (`node`, `bun`, `deno`,
-  `python*`, `ruby`, `perl`), the foreground process's argv is read and
-  the real program is used instead: `doas emerge -a` becomes `emerge`,
-  `node .../bin/codex` becomes `codex`, `python3 -m http.server` becomes
-  `http.server`. An interpreter with no script (a REPL, `-e`/`-c`) keeps
-  its own name.
-- **Workspace** is the first of these that applies:
-  1. For `ssh` or `mosh`, the remote host parsed out of the pane title.
-  2. **Session container.** If `#{session_path}`'s basename equals the
-     tmux session name, and the pane's path is that directory or under
-     it, use the session name.
-  3. **Git repository.** Otherwise, the basename of
-     `git rev-parse --show-toplevel`.
-  4. **Session name.** Otherwise, the session name itself.
-- **Area** is the pane's path relative to the winning Workspace's root,
-  when the pane is strictly under that root (never `..`, never emitted
-  when there is no root, e.g. the `ssh`/`mosh` candidate). It is capped to
-  its first `@tmux-autoname-area-depth` path segments (default `1`); set
-  it to `0` for the full, unlimited relative path.
-- With `@tmux-autoname-omit-session on`, a Workspace equal to the session
-  name is left out, since the session name already shows it: `claude`
-  instead of `claude:partjobs`, `zsh/patent-value-identification` instead
-  of `zsh:partjobs/patent-value-identification`. The Area keeps its slash,
-  which tells it apart from a Workspace; other Workspaces stay as they are.
+All parts come from the window's ACTIVE pane.
+
+- **Activity** is `pane_current_command`: basename, lower-cased, with a
+  `-coding-agent` suffix removed (`pi-coding-agent` is `pi`), and only
+  `[a-z0-9._+-]` kept; an empty result is `shell`. A launcher (`sudo`,
+  `doas`, `env`, `nice`, `timeout`, `systemd-run`, ...) or an interpreter
+  (`node`, `bun`, `deno`, `python*`, `ruby`, `perl`) is resolved through
+  the foreground process's argv to the program it runs: `doas emerge -a`
+  is `emerge`, `node .../bin/codex` is `codex`, `python3 -m http.server`
+  is `http.server`. An interpreter with no script (a REPL, `-e`, `-c`)
+  keeps its own name. `mosh-client` is `mosh`.
+- **Workspace** is the first rule that applies:
+  1. **Remote host.** For `ssh` and `mosh`, the remote host, lower-cased.
+     It is read from the foreground process's argv: options (and their
+     values) are skipped, the first positional is taken, and a `user@`
+     prefix, an `ssh://` scheme and a `:port` are removed. For
+     `mosh-client`, or when argv gives nothing, the host is parsed from
+     the pane title. There is no Area. Without `/proc` (macOS), argv
+     comes from `ps`, which joins arguments with spaces, so an argument
+     that contains a space (`-o 'Opt value'`) can shift the host.
+  2. **Session container.** If the basename of `#{session_path}` equals
+     the session name, and the pane path is that directory or under it:
+     the session name, with `#{session_path}` as root.
+  3. **Git repository.** The basename of `git rev-parse --show-toplevel`,
+     with the toplevel as root. In a linked worktree this is the worktree
+     directory's name.
+  4. **Session name.** The session name, with no root.
+- **Area** is the pane path relative to the Workspace root, when the pane
+  is strictly under that root. It keeps the first
+  `@tmux-autoname-area-depth` path segments (default `1`; `0` keeps the
+  full relative path). There is no Area without a root.
+- **Omit session.** With `@tmux-autoname-omit-session on` (the default), a
+  Workspace equal to the session name is left out: `claude` instead of
+  `claude:partjobs`, `zsh:patent-value-identification` instead of
+  `zsh:partjobs/patent-value-identification`. Thus `A:x` alone does not
+  tell if `x` is a Workspace or an Area.
+
+## Icons
+
+Every `sync` sets `@tmux-autoname-icon` from the Activity, also on a
+window with a Manual Name: a Manual Name changes only the name, and the
+icon still shows what runs in the window.
+
+The icon is matched against the resolved Activity with sh `case` globs.
+The first match wins, in this order:
+
+1. your entries in `@tmux-autoname-icons`,
+2. the built-in table below,
+3. `@tmux-autoname-icon-default`, by default U+F018D (󰆍).
+
+Because the match uses the resolved Activity, `doas nvim` gets the vim
+icon too.
+
+| Patterns | Codepoint | Glyph | Meaning |
+|---|---|---|---|
+| `nvim*` `vim*` `vi` | U+E62B |  | vim |
+| `claude*` | U+273B | ✻ | Claude Code |
+| `codex*` `opencode*` `pi` | U+F06A9 | 󰚩 | other agents |
+| `ssh*` `mosh*` | U+F08C0 | 󰣀 | remote |
+| `btop*` `htop*` `top` | U+F035B | 󰍛 | system monitor |
+| `python*` `ipython*` | U+E606 |  | python |
+| `git*` `lazygit*` `tig` | U+F02A2 | 󰊢 | git |
+| `yazi*` `lf` `ranger*` | U+F024B | 󰉋 | file manager |
+| `man` `less` `bat` | U+F0219 | 󰈙 | pager |
+| `zsh*` `bash*` `fish*` `dash*` `sh` `shell` | U+F489 |  | shell |
+
+All glyphs except U+273B need a Nerd Font.
+
+`@tmux-autoname-icons` holds whitespace-separated `pattern=icon` pairs,
+each split at the first `=`. An icon cannot contain whitespace. Your
+entries come before the built-in table, so they can also override it:
+
+```tmux
+set -g @tmux-autoname-icons 'emerge=󰏗 python*=X'
+set -g @tmux-autoname-icon-default '·'
+```
 
 ## Commands
 
@@ -147,27 +207,26 @@ tmux-autoname status [-t window]
 tmux-autoname help
 ```
 
-- `sync` recomputes the name of the window a pane or window id belongs
-  to, from that window's currently ACTIVE pane - not the pane you passed,
-  if they differ. Hooks (and the zsh integration) call this for you; you
-  normally don't need to.
-- `auto` forgets a manual `tmux rename-window` and re-syncs immediately.
-- `status` prints the window's current name, the name last applied by
-  `sync`, and whether it's been manually overridden.
+- `sync` sets the name and icon of the window that the pane or window
+  belongs to, from that window's ACTIVE pane, not from the pane you give.
+  The hooks and the zsh integration call it; you seldom need to.
+- `auto` forgets a Manual Name and syncs at once.
+- `status` prints `name:`, `applied:` (the last name set by `sync`),
+  `manual:`, `activity:` and `icon:` lines.
 
-A user rename (tmux's own `prefix` + <kbd>,</kbd>, or `rename-window`)
-takes precedence until you run `tmux-autoname auto` or rename the window
-to an empty string (`tmux rename-window ""`), which restores automatic
-naming.
+A Manual Name (tmux's own `prefix` + <kbd>,</kbd>, or `rename-window`)
+stays until you run `tmux-autoname auto` or rename the window to an empty
+string (`tmux rename-window ""`).
 
 ## Options
 
 | Option | Default | Meaning |
 |---|---|---|
-| `@tmux-autoname-area-depth` | `1` | Path segments of the Area to keep; `0` for the full relative path |
-| `@tmux-autoname-bin` | unset | Path to the `tmux-autoname` binary to use, if not the one in this checkout - must be set before the plugin loads |
-| `@tmux-autoname-key-auto` | unset | Key, bound in the `prefix` table, that runs `auto` on the current window |
-| `@tmux-autoname-omit-session` | `off` | `on` leaves out a Workspace equal to the session name (see Naming rule) |
+| `@tmux-autoname-area-depth` | `1` | Path segments of the Area to keep; `0` keeps the full relative path |
+| `@tmux-autoname-omit-session` | `on` | Leave out a Workspace equal to the session name; `off` keeps it |
+| `@tmux-autoname-icons` | empty | Your `pattern=icon` pairs, checked before the built-in table |
+| `@tmux-autoname-icon-default` | U+F018D (󰆍) | Icon when no pattern matches |
+| `@tmux-autoname-key-auto` | unset | Key in the `prefix` table that runs `auto` on the current window |
 
 Set these before the plugin loads:
 
@@ -176,40 +235,33 @@ set -g @tmux-autoname-area-depth 0
 set -g @tmux-autoname-key-auto 'M-a'
 ```
 
-## Upgrading from 0.6 and earlier
+## Upgrading to 1.0
 
-0.7 removes every AI/agent-title feature 0.6 added: `set`, `clear`, the
-Pin, the sticky Task, the fixed Workspace, `@tmux-autoname-agents`,
-`@tmux-autoname-max-width`, the `-key-set`/`-key-clear`/`-key-pick`
-bindings, the `pane-title-changed` hook, and
-`integrations/pi/session-title.ts`. Naming is deterministic again; see
-[docs/adr/0005-restore-deterministic-naming.md](docs/adr/0005-restore-deterministic-naming.md).
-Loading the new `tmux-autoname.tmux` migrates a prior install
-automatically: it stops any lingering pre-0.6 daemon, overwrites the old
-indexed hooks, removes the badge fragment 0.5 and earlier appended to your
-`window-status-format`/`window-status-current-format`, and unsets all
-obsolete global and per-window options from both the pre-0.6 daemon and
-0.6 itself.
+1.0 is a rewrite and does not migrate older installs.
 
-It also migrates every window's old per-window state left by the pre-0.6
-daemon (`@tmux-autoname-state`, base64-encoded JSON, and
-`@tmux-autoname-badge`): a window the old daemon had in manual mode is kept
-manual (sync will never rename it), one it had in automatic mode is handed
-to the new plugin to name from scratch, and both options are then unset. A
-window with no old state at all, but whose `automatic-rename` was
-explicitly turned off (a plain `tmux rename-window` you did yourself, with
-no tmux-autoname involved), is also treated as manual, so a manual rename
-survives the upgrade either way. If old state exists but can't be decoded,
-the window is treated as manual too - tmux-autoname never overwrites a name
-it isn't sure about. See [CHANGELOG.md](CHANGELOG.md) for details.
+- The separator after the Activity is now always `:`. Pre-1.0 builds
+  with omit-session on gave `zsh/src`; 1.0 gives `zsh:src`.
+- `@tmux-autoname-omit-session` is `on` by default. Set it to `off` to
+  keep the Workspace in every name, as 0.7 always did.
+- `@tmux-autoname-bin` is removed. Delete it from your config.
+- Add `#{@tmux-autoname-icon}` to your formats (see
+  [Show the icon](#show-the-icon)). If your formats had a
+  `#{m:...,#W}` table that chose an icon from the window name, remove it.
+- The old hooks at index `[120]` are overwritten on load. Options and
+  per-window state from older versions stay until the tmux server
+  restarts; run `tmux kill-server` once if you want a clean state.
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Limits
 
-- Without the zsh integration, the Activity and Area only update on
-  tmux's own window/pane/session events, not on a foreground-command
-  change or `cd` inside the same pane.
-- Only `git` is consulted for the Workspace; other version-control
-  systems fall back to the session name or the directory basename.
+- Without the zsh integration, the name and icon only update on tmux's own
+  window, pane and session events, not on a new foreground command or a
+  `cd` in the same pane.
+- Only `git` is used for the Workspace; other version-control systems
+  fall back to the session-container rule or the session name.
+- The remote host is the name given to `ssh` (for example a `Host` alias
+  from `~/.ssh/config`), not the resolved `HostName`.
 
 ## Development and verification
 
@@ -218,7 +270,6 @@ shellcheck tmux-autoname.tmux bin/tmux-autoname test/run.sh
 sh test/run.sh
 ```
 
-`test/run.sh` starts real, isolated tmux servers (`tmux -L
-tmux-autoname-test-*`) and drives them with fake processes exec'd under
-the names it needs to test, so it exercises the actual hooks, not a
-reimplementation of them.
+`test/run.sh` starts real, isolated tmux servers (`tmux -L <name>`) and
+drives them with fake processes exec'd under the names it needs, so it
+tests the real hooks, not a copy of them.

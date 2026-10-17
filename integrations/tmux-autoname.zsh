@@ -1,51 +1,43 @@
 # tmux-autoname zsh integration. Source this from your .zshrc.
 #
-# tmux has no hook for "the foreground program changed" or "cwd changed",
-# so without this file the window name only updates on tmux's own
-# window/pane/session events (new window, pane focus change, split,
-# session create, client attach). This closes that gap: it re-syncs the
-# current pane's window right after a command starts, right before the
-# next prompt, and on every `cd`, so the Activity and Area stay accurate
-# as you actually work. See docs/adr/0005-restore-deterministic-naming.md.
+# tmux has no hook for "the foreground program changed" or "cwd changed".
+# This re-syncs the pane's window 0.3 s after a command starts, before each
+# prompt, and on every `cd`, so the name and icon follow what you run.
+# See docs/adr/0006-rewrite-with-icons.md.
 #
-# Every sync below is backgrounded and disowned with zsh's `&!`, so it
-# never slows down the prompt and never prints a job-control message.
+# Every sync is backgrounded and disowned with `&!`: it never slows the
+# prompt and never prints a job-control message.
 
-if [ -n "${TMUX_PANE:-}" ]; then
-  _tmux_autoname_bin() {
-    if [ -n "${TMUX_AUTONAME_BIN:-}" ]; then
-      printf '%s' "$TMUX_AUTONAME_BIN"
-    else
-      printf 'tmux-autoname'
-    fi
-  }
+if [[ -n ${TMUX_PANE:-} ]]; then
+  typeset -g _tmux_autoname_delayed_pid= _tmux_autoname_delayed_at=
 
-  _tmux_autoname_sync_soon() {
-    local bin
-    bin=$(_tmux_autoname_bin)
-    (sleep 0.3; "$bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
-  }
-
-  _tmux_autoname_sync_now() {
-    local bin
-    bin=$(_tmux_autoname_bin)
+  # The loader exports TMUX_AUTONAME_BIN into tmux's global environment.
+  _tmux_autoname_sync() {
+    local bin=${TMUX_AUTONAME_BIN:-tmux-autoname}
     ("$bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
   }
 
-  autoload -Uz add-zsh-hook
-
   _tmux_autoname_preexec() {
-    _tmux_autoname_sync_soon
+    local bin=${TMUX_AUTONAME_BIN:-tmux-autoname}
+    (sleep 0.3; exec "$bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
+    _tmux_autoname_delayed_pid=$! _tmux_autoname_delayed_at=$SECONDS
   }
 
   _tmux_autoname_precmd() {
-    _tmux_autoname_sync_now
+    # A command that ended within the delay must not let its delayed sync
+    # land after this one and bring back the finished program's name. Only
+    # a recent pid is killed: an old one may belong to another process now.
+    if [[ -n $_tmux_autoname_delayed_pid ]] &&
+      (( SECONDS - _tmux_autoname_delayed_at < 5 )); then
+      kill $_tmux_autoname_delayed_pid 2>/dev/null
+    fi
+    _tmux_autoname_delayed_pid=
+    _tmux_autoname_sync
   }
 
-  _tmux_autoname_chpwd() {
-    _tmux_autoname_sync_now
-  }
+  _tmux_autoname_chpwd() { _tmux_autoname_sync }
 
+  autoload -Uz add-zsh-hook
   add-zsh-hook preexec _tmux_autoname_preexec
   add-zsh-hook precmd _tmux_autoname_precmd
   add-zsh-hook chpwd _tmux_autoname_chpwd

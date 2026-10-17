@@ -1,67 +1,77 @@
 #!/usr/bin/env sh
-# tmux-autoname: deterministic <activity>:<workspace>[/<area>] window names.
-# See docs/adr/0005-restore-deterministic-naming.md for the naming rule.
-set -eu
+# tmux-autoname: deterministic window names (A:W/R, A:W, A:R or A from
+# Activity, Workspace, Area) and a per-window @tmux-autoname-icon.
+# See docs/adr/0006-rewrite-with-icons.md.
+set -euf
 
-gopt() {
-  # $1 = option name, $2 = default
-  v=$(tmux show-option -gqv "$1" 2>/dev/null) || v=""
-  if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+# -u: without a UTF-8 locale tmux prints the 0x1f field separator and
+# non-ASCII bytes as "_".
+tmux() { command tmux -u "$@"; }
+
+US=$(printf '\037')
+DEFAULT_ICON='󰆍'
+
+# Every field sync needs, read in one display-message call. The trailing "."
+# keeps a final empty field from being dropped by field splitting.
+FIELDS="#{window_id}${US}#{pane_id}${US}#{pane_active}${US}#{window_name}${US}\
+#{pane_current_command}${US}#{pane_pid}${US}#{pane_title}${US}\
+#{pane_current_path}${US}#{session_name}${US}#{session_path}${US}\
+#{@tmux-autoname-applied}${US}#{@tmux-autoname-icon}${US}\
+#{@tmux-autoname-area-depth}${US}#{@tmux-autoname-omit-session}${US}\
+#{@tmux-autoname-icons}${US}#{@tmux-autoname-icon-default}${US}."
+
+# Sets win pane pane_active name pcmd pane_pid title cwd session session_path
+# applied icon_cur depth omit icons icon_default from the fields.
+assign_fields() {
+  [ $# -ge 17 ] || return 1
+  win=$1 pane=$2 pane_active=$3 name=$4 pcmd=$5 pane_pid=$6 title=$7
+  cwd=$8 session=$9 session_path=${10} applied=${11} icon_cur=${12}
+  depth=${13} omit=${14} icons=${15} icon_default=${16}
 }
 
-wopt() {
-  # $1 = window id, $2 = option name
-  tmux show-option -t "$1" -wqv "$2" 2>/dev/null || printf ''
-}
-
-wset() {
-  # $1 = window id, $2 = option name, $3 = value
-  tmux set-option -t "$1" -w -q "$2" "$3" 2>/dev/null || true
-}
-
-wunset() {
-  # $1 = window id, $2 = option name
-  tmux set-option -t "$1" -wu "$2" 2>/dev/null || true
-}
-
-pane_field() {
-  # $1 = pane id, $2 = format variable name (no braces)
-  tmux display-message -p -t "$1" "#{$2}" 2>/dev/null || printf ''
-}
-
-resolve_win() {
-  # $1 = target (pane, window, or empty for current)
+# Read the fields of the window's ACTIVE pane. $1 = target (may be empty).
+read_window() {
   if [ -n "$1" ]; then
-    tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null || printf ''
+    out=$(tmux display-message -p -t "$1" "$FIELDS" 2>/dev/null) || return 1
   else
-    tmux display-message -p '#{window_id}' 2>/dev/null || printf ''
+    out=$(tmux display-message -p "$FIELDS" 2>/dev/null) || return 1
   fi
+  old_ifs=$IFS
+  IFS=$US
+  # shellcheck disable=SC2086
+  assign_fields $out || { IFS=$old_ifs; return 1; }
+  IFS=$old_ifs
+  [ -n "$win" ] || return 1
+  # A pane target may not be the active pane; name from the active one.
+  if [ "$pane_active" != 1 ]; then
+    out=$(tmux display-message -p -t "$win" "$FIELDS" 2>/dev/null) || return 1
+    IFS=$US
+    # shellcheck disable=SC2086
+    assign_fields $out || { IFS=$old_ifs; return 1; }
+    IFS=$old_ifs
+  fi
+  return 0
 }
 
-# Activity: pane_current_command basename, lower-cased, with a
-# "-coding-agent" suffix stripped and only [a-z0-9._+-] kept; empty
-# becomes "shell".
+# Activity of a command name: basename, lower-cased, "-coding-agent"
+# removed, only [a-z0-9._+-] kept, empty -> "shell", mosh-client -> mosh.
 compute_activity() {
-  # $1 = pane_current_command
-  pcmd=$1
-  name=$(basename -- "$pcmd")
-  name=$(printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-
-  case "$name" in
-    *-coding-agent) name=${name%-coding-agent} ;;
+  # $1 = command
+  a=$(printf '%s' "${1##*/}" | LC_ALL=C sed \
+    -e 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/' \
+    -e 's/-coding-agent$//' -e 's/[^a-z0-9._+-]//g')
+  case "$a" in
+    '') a=shell ;;
+    mosh-client) a=mosh ;;
   esac
-
-  name=$(printf '%s' "$name" | LC_ALL=C sed -E 's/[^a-z0-9._+-]//g')
-  [ -n "$name" ] || name="shell"
-  printf '%s' "$name"
+  printf '%s' "$a"
 }
 
-# True (0) when a pane_current_command is a launcher (sudo, env, ...) or an
+# True (0) when an Activity is a launcher (sudo, env, ...) or an
 # interpreter (node, python, ...) whose real program is further down argv.
-is_wrapper_command() {
-  # $1 = pane_current_command
-  name=$(basename -- "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-  case "$name" in
+is_wrapper() {
+  # $1 = activity
+  case "$1" in
     sudo | doas | env | nice | ionice | nohup | time | stdbuf | setsid | \
       timeout | taskset | chrt | flock | systemd-run | unbuffer | chronic | \
       node | nodejs | node[0-9]* | bun | deno | \
@@ -76,10 +86,9 @@ is_wrapper_command() {
 # one argument per line. Empty when it can't be read.
 foreground_argv() {
   # $1 = pane_pid
-  pid=$1
-  case "$pid" in '' | *[!0-9]*) return 0 ;; esac
-  if [ -r "/proc/$pid/stat" ]; then
-    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
+  case "$1" in '' | *[!0-9]*) return 0 ;; esac
+  if [ -r "/proc/$1/stat" ]; then
+    stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 0
     # Fields after "(comm) ": state ppid pgrp session tty_nr tpgid ...
     # shellcheck disable=SC2086
     set -- ${stat##*) }
@@ -87,9 +96,11 @@ foreground_argv() {
     case "$fg" in '' | *[!0-9]* | 0 | -*) return 0 ;; esac
     tr '\0' '\n' <"/proc/$fg/cmdline" 2>/dev/null || true
   else
-    fg=$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ') || return 0
+    fg=$(ps -o tpgid= -p "$1" 2>/dev/null | tr -d ' ') || return 0
     case "$fg" in '' | *[!0-9]* | 0) return 0 ;; esac
-    ps -o args= -p "$fg" 2>/dev/null | tr ' ' '\n' || true
+    # ps joins argv with spaces, so an argument that contains a space is
+    # split in two here (a known limit without /proc).
+    ps -ww -o args= -p "$fg" 2>/dev/null | tr ' ' '\n' || true
   fi
 }
 
@@ -203,8 +214,44 @@ resolve_argv() {
   '
 }
 
+# Remote host from an ssh/mosh argv (one arg per line on stdin): the first
+# positional after the ssh/mosh word, without ssh://, user@ or :port,
+# lower-cased. Prints nothing unless that looks like a host name.
+host_from_argv() {
+  LC_ALL=C awk '
+    function base(p) { sub(/\/+$/, "", p); sub(/.*\//, "", p); return tolower(p) }
+    { argv[n++] = $0 }
+    END {
+      for (i = 0; i < n && base(argv[i]) !~ /^(ssh|mosh)$/; i++) ;
+      prog = base(argv[i])
+      for (i++; i < n; i++) {
+        a = argv[i]
+        if (a == "--") { i++; break }
+        if (a !~ /^-./) break
+        # Getopt cluster: the first value-taking letter takes the rest of
+        # the cluster as its value, or the next argument when it is last.
+        if (a ~ /^-[A-Za-z0-9]+$/) {
+          for (k = 2; k <= length(a); k++)
+            if (index("BbcDEeFIiJLlmOoPpQRSWw", substr(a, k, 1))) {
+              if (k == length(a)) i++
+              break
+            }
+          continue
+        }
+        if (prog == "mosh" && a ~ /^--(ssh|port|predict|family|server|bind-server|experimental-remote-ip)$/) { i++; continue }
+      }
+      if (i >= n) exit
+      h = tolower(argv[i])
+      sub(/^ssh:\/\//, "", h)
+      sub(/.*@/, "", h)
+      sub(/[:\/].*$/, "", h)
+      if (h ~ /^[a-z0-9][a-z0-9._-]*$/) print h
+    }
+  '
+}
+
 # Parse a remote host out of an ssh/mosh pane_title, lower-cased.
-remote_host_from_title() {
+host_from_title() {
   # $1 = pane_title
   printf '%s' "$1" | LC_ALL=C sed -nE \
     's/^[[:space:]]*(([^@[:space:]]+@)?([a-zA-Z0-9][a-zA-Z0-9.-]{0,252})([:[:space:]].*|$)).*/\3/p' |
@@ -212,243 +259,221 @@ remote_host_from_title() {
     LC_ALL=C tr '[:upper:]' '[:lower:]'
 }
 
-# True (0) when $1 is $2 or a strict descendant of it.
-is_under() {
-  # $1 = path, $2 = root
-  path=$1
-  root=$2
-  [ -n "$root" ] || return 1
-  case "$path" in
-    "$root") return 1 ;;
-    "$root"/*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# Compute the Workspace + root for a pane, per the ordered candidate rule.
-# Prints "workspace<TAB>root" (root may be empty) on success.
-compute_workspace() {
-  # $1 = activity, $2 = cwd, $3 = pane_title, $4 = session, $5 = session_path
-  activity=$1
-  cwd=$2
-  pane_title=$3
-  session=$4
-  session_path=$5
-
-  case "$activity" in
-    ssh | mosh)
-      host=$(remote_host_from_title "$pane_title")
-      if [ -n "$host" ]; then
-        printf '%s\t%s' "$host" ""
-        return 0
-      fi
-      ;;
-  esac
-
-  if [ -n "$session" ] && [ -n "$session_path" ] &&
-    [ "$(basename -- "$session_path")" = "$session" ]; then
-    if [ "$cwd" = "$session_path" ] || is_under "$cwd" "$session_path"; then
-      printf '%s\t%s' "$session" "$session_path"
+# Icon for an Activity: @tmux-autoname-icons pairs, then the built-in
+# table, then the default.
+icon_for() {
+  # $1 = activity, $2 = @tmux-autoname-icons, $3 = @tmux-autoname-icon-default
+  for pair in $2; do
+    case "$pair" in ?*=*) ;; *) continue ;; esac
+    # shellcheck disable=SC2254
+    case "$1" in ${pair%%=*})
+      printf '%s' "${pair#*=}"
       return 0
-    fi
-  fi
-
-  if [ -n "$cwd" ] && command -v git >/dev/null 2>&1; then
-    toplevel=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || toplevel=""
-    if [ -n "$toplevel" ]; then
-      printf '%s\t%s' "$(basename -- "$toplevel")" "$toplevel"
-      return 0
-    fi
-  fi
-
-  if [ -n "$session" ]; then
-    printf '%s\t%s' "$session" ""
-    return 0
-  fi
-
-  if [ -n "$cwd" ]; then
-    printf '%s\t%s' "$(basename -- "$cwd")" "$cwd"
-    return 0
-  fi
-
-  printf '%s\t%s' "shell" ""
-}
-
-# Area: cwd relative to root, only when cwd is a strict descendant of root.
-# Truncated to the first $3 path segments ($3 = @tmux-autoname-area-depth,
-# default 1); 0 means unlimited (the full relative path).
-compute_area() {
-  # $1 = cwd, $2 = root, $3 = depth
-  cwd=$1
-  root=$2
-  depth=$3
-  is_under "$cwd" "$root" || { printf ''; return 0; }
-  rel=${cwd#"$root"/}
-
-  case "$depth" in
-    '' | *[!0-9]* | 0) : ;;
-    *)
-      kept=""
-      remaining=$rel
-      n=0
-      while [ "$n" -lt "$depth" ]; do
-        n=$((n + 1))
-        case "$remaining" in
-          */*)
-            seg=${remaining%%/*}
-            remaining=${remaining#*/}
-            ;;
-          *)
-            seg=$remaining
-            remaining=""
-            ;;
-        esac
-        if [ -n "$kept" ]; then
-          kept="$kept/$seg"
-        else
-          kept=$seg
-        fi
-        [ -n "$remaining" ] || break
-      done
-      rel=$kept
       ;;
+    esac
+  done
+  case "$1" in
+    nvim* | vim* | vi) printf '%s' '' ;;
+    claude*) printf '%s' '✻' ;;
+    codex* | opencode* | pi) printf '%s' '󰚩' ;;
+    ssh* | mosh*) printf '%s' '󰣀' ;;
+    btop* | htop* | top) printf '%s' '󰍛' ;;
+    python* | ipython*) printf '%s' '' ;;
+    git* | lazygit* | tig) printf '%s' '󰊢' ;;
+    yazi* | lf | ranger*) printf '%s' '󰉋' ;;
+    man | less | bat) printf '%s' '󰈙' ;;
+    zsh* | bash* | fish* | dash* | sh | shell) printf '%s' '' ;;
+    *) printf '%s' "${3:-$DEFAULT_ICON}" ;;
   esac
-
-  printf '%s' "$rel"
 }
 
-# Apply renderName's cleanup: collapse repeated ":"/"/" , drop ":/" runs,
-# trim leading/trailing ":" or "/", collapse internal whitespace.
-render_name() {
-  printf '%s' "$1" |
-    LC_ALL=C sed -E \
-      -e 's/:+/:/g' \
-      -e 's#/{2,}#/#g' \
-      -e 's#:/#:#g' \
-      -e 's/^[:\/]+//' \
-      -e 's/[:\/]+$//' \
-      -e 's/[[:space:]]+/ /g'
-}
-
-do_sync() {
-  target=$1
-  if [ -z "$target" ]; then
-    target=$(tmux display-message -p '#{window_id}' 2>/dev/null) || return 0
-  fi
-  win=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || return 0
-  [ -n "$win" ] || return 0
-  active_pane=$(tmux display-message -p -t "$win" '#{pane_id}' 2>/dev/null) || return 0
-  [ -n "$active_pane" ] || return 0
-
-  applied=$(wopt "$win" @tmux-autoname-applied)
-  curname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null) || curname=""
-  if [ -n "$applied" ] && [ "$curname" != "$applied" ]; then
-    return 0
-  fi
-
+# Activity of the fields read by read_window: waits out the fresh-pane race
+# and resolves launchers and interpreters. Sets activity and argv.
+resolve_activity() {
   # A just-created pane briefly reports pane_current_command as "tmux"
-  # itself (or empty), before the shell it execs has taken over - a race
-  # between this hook firing and that fork/exec completing. Since no hook
-  # fires again once the shell settles, naming the window from that
-  # placeholder here would stick forever. Retry a few times first; this
-  # normally resolves within a couple of iterations.
+  # (or empty) before the shell it execs takes over. No hook fires once
+  # the shell settles, so retry a few times before naming from it.
   tries=0
-  pcmd=$(pane_field "$active_pane" pane_current_command)
-  while [ "$tries" -lt 10 ] && { [ -z "$pcmd" ] || [ "$pcmd" = "tmux" ]; }; do
+  while [ "$tries" -lt 10 ] && { [ -z "$pcmd" ] || [ "$pcmd" = tmux ]; }; do
     sleep 0.05
-    pcmd=$(pane_field "$active_pane" pane_current_command)
+    pcmd=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || pcmd=""
     tries=$((tries + 1))
   done
-  if is_wrapper_command "$pcmd"; then
-    pane_pid=$(pane_field "$active_pane" pane_pid)
-    resolved=$(foreground_argv "$pane_pid" | resolve_argv) || resolved=""
-    [ -z "$resolved" ] || pcmd=$resolved
-  fi
-  pane_title=$(pane_field "$active_pane" pane_title)
-  cwd=$(pane_field "$active_pane" pane_current_path)
-  session=$(tmux display-message -p -t "$win" '#{session_name}' 2>/dev/null) || session=""
-  session_path=$(tmux display-message -p -t "$win" '#{session_path}' 2>/dev/null) || session_path=""
-
   activity=$(compute_activity "$pcmd")
-  ws_and_root=$(compute_workspace "$activity" "$cwd" "$pane_title" "$session" "$session_path")
-  workspace=${ws_and_root%%	*}
-  root=${ws_and_root#*	}
-
-  area_depth=$(gopt @tmux-autoname-area-depth 1)
-  area=""
-  if [ -n "$root" ] && [ -n "$cwd" ]; then
-    area=$(compute_area "$cwd" "$root" "$area_depth")
+  argv=""
+  if is_wrapper "$activity"; then
+    argv=$(foreground_argv "$pane_pid")
+    resolved=$(printf '%s\n' "$argv" | resolve_argv) || resolved=""
+    [ -z "$resolved" ] || activity=$(compute_activity "$resolved")
+  elif [ "$activity" = ssh ] || [ "$activity" = mosh ]; then
+    # mosh-client's argv is an IP and port, not the user's host.
+    [ "${pcmd##*/}" = mosh-client ] || argv=$(foreground_argv "$pane_pid")
   fi
-
-  # @tmux-autoname-omit-session: the session name already says which
-  # Workspace this is, so drop it: "claude", "zsh/src". The Area keeps its
-  # slash, which tells it apart from a Workspace.
-  if [ "$(gopt @tmux-autoname-omit-session off)" = on ] &&
-    [ -n "$session" ] && [ "$workspace" = "$session" ]; then
-    workspace=""
-  fi
-
-  if [ -n "$area" ] && [ -n "$workspace" ]; then
-    raw_name="$activity:$workspace/$area"
-  elif [ -n "$area" ]; then
-    raw_name="$activity/$area"
-  else
-    raw_name="$activity:$workspace"
-  fi
-  newname=$(render_name "$raw_name")
-
-  if [ "$curname" != "$newname" ]; then
-    tmux rename-window -t "$win" -- "$newname" 2>/dev/null || true
-  fi
-  wset "$win" @tmux-autoname-applied "$newname"
   return 0
 }
 
-cmd_sync() {
-  opt_t=""
-  if [ "${1:-}" = "-t" ]; then
-    opt_t=${2:-}
-    shift 2
+# True (0) when $1 is a strict descendant of $2.
+is_under() {
+  [ -n "$2" ] || return 1
+  case "$1" in "$2"/?*) return 0 ;; esac
+  return 1
+}
+
+# Sets workspace and root (root may be empty).
+compute_workspace() {
+  root=""
+  case "$activity" in
+    ssh | mosh)
+      workspace=""
+      [ -z "$argv" ] || workspace=$(printf '%s\n' "$argv" | host_from_argv)
+      [ -n "$workspace" ] || workspace=$(host_from_title "$title")
+      [ -z "$workspace" ] || return 0
+      ;;
+  esac
+  if [ -n "$session" ] && [ "${session_path##*/}" = "$session" ] &&
+    { [ "$cwd" = "$session_path" ] || is_under "$cwd" "$session_path"; }; then
+    workspace=$session root=$session_path
+    return 0
   fi
-  do_sync "$opt_t"
+  if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || top=""
+    if [ -n "$top" ]; then
+      workspace=${top##*/} root=$top
+      return 0
+    fi
+  fi
+  workspace=$session
+}
+
+# Area: cwd relative to root, when strictly under it, capped to the first
+# $3 segments (0 = unlimited).
+compute_area() {
+  # $1 = cwd, $2 = root, $3 = depth
+  is_under "$1" "$2" || return 0
+  rel=${1#"$2"/}
+  kept=""
+  n=0
+  while [ "$3" -eq 0 ] || [ "$n" -lt "$3" ]; do
+    n=$((n + 1))
+    seg=${rel%%/*}
+    kept=${kept:+$kept/}$seg
+    case "$rel" in */*) rel=${rel#*/} ;; *) break ;; esac
+  done
+  printf '%s' "$kept"
+}
+
+# Sets v to $1 made safe as a word of a batched tmux call: tmux takes a
+# word that ends in ";" as a command separator unless it ends in "\;".
+batch_word() {
+  case "$1" in
+    *';') v="${1%;}\\;" ;;
+    *) v=$1 ;;
+  esac
+}
+
+is_manual() {
+  [ -n "$applied" ] && [ "$name" != "$applied" ]
+}
+
+do_sync() {
+  # $1 = target (pane, window, or empty for current)
+  read_window "$1" || return 0
+  resolve_activity
+  icon=$(icon_for "$activity" "$icons" "$icon_default")
+
+  # One tmux call for every write, each only when its value changes.
+  set --
+  if [ "$icon" != "$icon_cur" ]; then
+    batch_word "$icon"
+    set -- "$@" set-option -wq -t "$win" @tmux-autoname-icon "$v" ';'
+  fi
+
+  if ! is_manual; then
+    compute_workspace
+    case "$depth" in '' | *[!0-9]*) depth=1 ;; esac
+    area=$(compute_area "$cwd" "$root" "$depth")
+    case "$omit" in off | no | false | 0) ;; *) [ "$workspace" != "$session" ] || workspace="" ;; esac
+
+    if [ -n "$workspace" ] && [ -n "$area" ]; then
+      newname="$activity:$workspace/$area"
+    elif [ -n "$workspace" ]; then
+      newname="$activity:$workspace"
+    elif [ -n "$area" ]; then
+      newname="$activity:$area"
+    else
+      newname=$activity
+    fi
+
+    # tmux rejects a name with a control character.
+    case "$newname" in
+      *[[:cntrl:]]*) newname=$(printf '%s' "$newname" | tr -d '[:cntrl:]') ;;
+    esac
+
+    # rename-window format-expands its argument and tmux escapes some bytes
+    # when it stores a name, so record the stored #{window_name}, not
+    # $newname. If tmux rejects the rename, the rest of the batch does not
+    # run and the window does not turn into a Manual Name.
+    renamed=no
+    if [ "$newname" != "$name" ]; then
+      renamed=yes
+      case "$newname" in
+        *'#'*) newname=$(printf '%s' "$newname" | sed 's/#/##/g') ;;
+      esac
+      batch_word "$newname"
+      set -- "$@" rename-window -t "$win" -- "$v" ';'
+    fi
+    if [ "$renamed" = yes ] || [ -z "$applied" ]; then
+      set -- "$@" set-option -wqF -t "$win" @tmux-autoname-applied \
+        '#{window_name}' ';'
+    fi
+    # The first time, turn tmux's automatic-rename off explicitly: when the
+    # name already matches, no rename-window does it, and tmux's own rename
+    # would later look like a Manual Name.
+    [ -n "$applied" ] ||
+      set -- "$@" set-option -wq -t "$win" automatic-rename off ';'
+  fi
+
+  [ $# -eq 0 ] || tmux "$@" >/dev/null 2>&1 || true
+  return 0
+}
+
+parse_target() {
+  # Sets target from "[-t target]".
+  target=""
+  if [ "${1:-}" = -t ]; then
+    target=${2:-}
+  fi
+}
+
+cmd_sync() {
+  parse_target "$@"
+  do_sync "$target"
 }
 
 cmd_auto() {
-  opt_t=""
-  if [ "${1:-}" = "-t" ]; then
-    opt_t=${2:-}
-    shift 2
-  fi
-  win=$(resolve_win "$opt_t")
-  [ -n "$win" ] || return 1
-  wunset "$win" @tmux-autoname-applied
+  parse_target "$@"
+  read_window "$target" || return 1
+  tmux set-option -wqu -t "$win" @tmux-autoname-applied 2>/dev/null || true
   do_sync "$win"
 }
 
 cmd_status() {
-  opt_t=""
-  if [ "${1:-}" = "-t" ]; then
-    opt_t=${2:-}
-    shift 2
-  fi
-  win=$(resolve_win "$opt_t")
-  [ -n "$win" ] || return 1
-  applied=$(wopt "$win" @tmux-autoname-applied)
-  curname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null) || curname=""
-
+  parse_target "$@"
+  read_window "$target" || return 1
+  resolve_activity
   manual=no
-  if [ -n "$applied" ] && [ "$curname" != "$applied" ]; then
-    manual=yes
-  fi
-
-  printf 'name: %s\n' "$curname"
+  is_manual && manual=yes
+  printf 'name: %s\n' "$name"
   printf 'applied: %s\n' "$applied"
   printf 'manual: %s\n' "$manual"
+  printf 'activity: %s\n' "$activity"
+  printf 'icon: %s\n' "$(icon_for "$activity" "$icons" "$icon_default")"
 }
 
 cmd_help() {
   cat <<'EOF'
-tmux-autoname: deterministic <activity>:<workspace>[/<area>] window names.
+tmux-autoname: deterministic window names: A:W/R, A:W, A:R or A, from the
+Activity A, Workspace W and Area R.
 
 Usage:
   tmux-autoname sync [-t pane_or_window]
@@ -456,15 +481,16 @@ Usage:
   tmux-autoname status [-t window]
   tmux-autoname help
 
-sync renames the window a pane belongs to, from that window's currently
-active pane. auto forgets a manual rename and re-syncs. status prints
-the window's current name and manual-rename state.
+sync names a window from its active pane and sets its @tmux-autoname-icon;
+a window with a Manual Name keeps its name and only gets the icon. auto
+forgets the Manual Name and syncs. status prints the window's name,
+applied name, manual state, Activity and icon.
 EOF
 }
 
 main() {
   sub=${1:-help}
-  [ $# -gt 0 ] && shift
+  [ $# -eq 0 ] || shift
   case "$sub" in
     sync) cmd_sync "$@" ;;
     auto) cmd_auto "$@" ;;

@@ -116,8 +116,10 @@ and `sh:*` entries matched the window name and become plain `vi`, `pi`, `sh`.
 ### Manual Name
 
 Unchanged mechanism: after each automatic rename, `sync` records the name in
-`@tmux-autoname-applied`. If the window's current name differs from it, the
-name is manual and `sync` leaves it. `tmux-autoname auto` or
+`@tmux-autoname-applied`, read back as `#{window_name}` because tmux expands
+`#` in `rename-window` and escapes some bytes when it stores a name. If the
+window's current name differs from it, the name is manual and `sync` leaves
+it. `tmux-autoname auto` or
 `rename-window ""` (via the `after-rename-window` hook, guarded by
 `if-shell -F '#{==:#{window_name},}'`) clears it and re-syncs.
 
@@ -148,12 +150,14 @@ environment for the zsh integration.
 POSIX `sh`, tmux hooks, no daemon, no build. Hooks at index `[120]`:
 `after-new-window`, `after-select-window`, `window-pane-changed`,
 `after-split-window`, `client-attached`, `session-created`,
-`after-kill-pane` (all `run-shell -b "<bin> sync -t '#{window_id}'"`), and the
-guarded `after-rename-window`. The loader syncs every window at the end,
+`after-kill-pane`, `window-linked` (for `break-pane`, which has no `after-`
+hook; all `run-shell -b "<bin> sync -t '#{window_id}'"`), and the guarded
+`after-rename-window`. The loader syncs every window at the end,
 with `##{window_id}` double-hashed inside `run-shell`.
 
 `integrations/tmux-autoname.zsh` stays: sync 0.3 s after `preexec`, and at
-`precmd` and `chpwd`, all backgrounded with `&!`.
+`precmd` and `chpwd`, all backgrounded with `&!`. `precmd` kills a delayed
+sync that has not run yet, so it can't land after the prompt's sync.
 
 Performance: read all pane/window fields in one `tmux display-message -p`
 call; read argv from `/proc` on Linux and `ps` elsewhere; call
