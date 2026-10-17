@@ -4,29 +4,42 @@
 # See docs/adr/0006-rewrite-with-icons.md.
 set -euf
 
-# -u: without a UTF-8 locale tmux prints the 0x1f field separator and
-# non-ASCII bytes as "_".
+# -u: without a UTF-8 locale tmux prints non-ASCII bytes as "_".
 tmux() { command tmux -u "$@"; }
 
-US=$(printf '\037')
 DEFAULT_ICON='󰆍'
 
-# Every field sync needs, read in one display-message call. The trailing "."
-# keeps a final empty field from being dropped by field splitting.
-FIELDS="#{window_id}${US}#{pane_id}${US}#{pane_active}${US}#{window_name}${US}\
-#{pane_current_command}${US}#{pane_pid}${US}#{pane_title}${US}\
-#{pane_current_path}${US}#{session_name}${US}#{session_path}${US}\
-#{@tmux-autoname-applied}${US}#{@tmux-autoname-icon}${US}\
-#{@tmux-autoname-area-depth}${US}#{@tmux-autoname-omit-session}${US}\
-#{@tmux-autoname-icons}${US}#{@tmux-autoname-icon-default}${US}."
+# Every field sync needs, read in one display-message call, one per line.
+# A control-character separator is not portable: tmux 3.4 prints it as the
+# text "\037". The trailing "." keeps final empty lines.
+NL='
+'
+FIELDS="#{window_id}${NL}#{pane_id}${NL}#{pane_active}${NL}#{window_name}${NL}\
+#{pane_current_command}${NL}#{pane_pid}${NL}#{pane_title}${NL}\
+#{pane_current_path}${NL}#{session_name}${NL}#{session_path}${NL}\
+#{@tmux-autoname-applied}${NL}#{@tmux-autoname-icon}${NL}\
+#{@tmux-autoname-area-depth}${NL}#{@tmux-autoname-omit-session}${NL}\
+#{@tmux-autoname-icons}${NL}#{@tmux-autoname-icon-default}${NL}."
 
 # Sets win pane pane_active name pcmd pane_pid title cwd session session_path
-# applied icon_cur depth omit icons icon_default from the fields.
+# applied icon_cur depth omit icons icon_default from the lines of $1. Fails
+# unless there are exactly 17 lines (a value with a newline in it).
 assign_fields() {
-  [ $# -ge 17 ] || return 1
-  win=$1 pane=$2 pane_active=$3 name=$4 pcmd=$5 pane_pid=$6 title=$7
-  cwd=$8 session=$9 session_path=${10} applied=${11} icon_cur=${12}
-  depth=${13} omit=${14} icons=${15} icon_default=${16}
+  n=0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    case $n in
+      1) win=$line ;; 2) pane=$line ;; 3) pane_active=$line ;;
+      4) name=$line ;; 5) pcmd=$line ;; 6) pane_pid=$line ;;
+      7) title=$line ;; 8) cwd=$line ;; 9) session=$line ;;
+      10) session_path=$line ;; 11) applied=$line ;; 12) icon_cur=$line ;;
+      13) depth=$line ;; 14) omit=$line ;; 15) icons=$line ;;
+      16) icon_default=$line ;;
+    esac
+  done <<EOF_FIELDS
+$1
+EOF_FIELDS
+  [ "$n" -eq 17 ]
 }
 
 # Read the fields of the window's ACTIVE pane. $1 = target (may be empty).
@@ -36,19 +49,12 @@ read_window() {
   else
     out=$(tmux display-message -p "$FIELDS" 2>/dev/null) || return 1
   fi
-  old_ifs=$IFS
-  IFS=$US
-  # shellcheck disable=SC2086
-  assign_fields $out || { IFS=$old_ifs; return 1; }
-  IFS=$old_ifs
+  assign_fields "$out" || return 1
   [ -n "$win" ] || return 1
   # A pane target may not be the active pane; name from the active one.
   if [ "$pane_active" != 1 ]; then
     out=$(tmux display-message -p -t "$win" "$FIELDS" 2>/dev/null) || return 1
-    IFS=$US
-    # shellcheck disable=SC2086
-    assign_fields $out || { IFS=$old_ifs; return 1; }
-    IFS=$old_ifs
+    assign_fields "$out" || return 1
   fi
   return 0
 }
