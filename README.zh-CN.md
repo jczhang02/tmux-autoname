@@ -92,7 +92,7 @@ tmux 没有在前台程序或目录变化时触发的钩子. 没有帮助的话,
 source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 ```
 
-它在命令开始 0.3 s 后 (`preexec`), 每次提示符出现前 (`precmd`) 和 `cd` 时 (`chpwd`) 同步. 每次同步都在后台运行并 disown, 所以不会拖慢提示符, 也不会打印 job control 消息. 它使用 `$TMUX_AUTONAME_BIN`, 否则使用 `PATH` 里的 `tmux-autoname`.
+它在命令开始 0.3 s 后 (`preexec`), 每次提示符出现前 (`precmd`) 和 `cd` 时 (`chpwd`) 同步. 每次同步都在后台运行并 disown, 所以不会拖慢提示符, 也不会打印 job control 消息. 它使用 `$TMUX_AUTONAME_BIN`, 否则使用自己所在 checkout 里的 `bin/tmux-autoname` (新 server 第一个 pane 的 shell 在加载脚本导出这个变量之前就已启动), 再否则使用 `PATH` 里的 `tmux-autoname`.
 
 ## 命名规则
 

@@ -10,16 +10,19 @@
 
 if [[ -n ${TMUX_PANE:-} ]]; then
   typeset -g _tmux_autoname_delayed_pid= _tmux_autoname_delayed_at=
+  # The bin of this file's own checkout. The loader also exports
+  # TMUX_AUTONAME_BIN into tmux's global environment, but the shell of a new
+  # server's first pane starts before the loader runs and never gets it.
+  typeset -g _tmux_autoname_bin=${TMUX_AUTONAME_BIN:-${${(%):-%x}:A:h:h}/bin/tmux-autoname}
+  # A copy of this file outside a checkout uses tmux-autoname on PATH.
+  [[ -x $_tmux_autoname_bin ]] || _tmux_autoname_bin=tmux-autoname
 
-  # The loader exports TMUX_AUTONAME_BIN into tmux's global environment.
   _tmux_autoname_sync() {
-    local bin=${TMUX_AUTONAME_BIN:-tmux-autoname}
-    ("$bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
+    ("$_tmux_autoname_bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
   }
 
   _tmux_autoname_preexec() {
-    local bin=${TMUX_AUTONAME_BIN:-tmux-autoname}
-    (sleep 0.3; exec "$bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
+    (sleep 0.3; exec "$_tmux_autoname_bin" sync -t "$TMUX_PANE" >/dev/null 2>&1) &!
     _tmux_autoname_delayed_pid=$! _tmux_autoname_delayed_at=$SECONDS
   }
 

@@ -117,7 +117,9 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 It syncs 0.3 s after a command starts (`preexec`), before each prompt
 (`precmd`), and on `cd` (`chpwd`). Each sync runs in the background and is
 disowned, so it does not slow the prompt or print job-control messages.
-It uses `$TMUX_AUTONAME_BIN`, or `tmux-autoname` on `PATH`.
+It uses `$TMUX_AUTONAME_BIN`, else `bin/tmux-autoname` of its own
+checkout (the shell of a new server's first pane starts before the loader
+exports the variable), else `tmux-autoname` on `PATH`.
 
 ## Naming rule
 

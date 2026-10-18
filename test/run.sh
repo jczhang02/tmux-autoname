@@ -864,6 +864,34 @@ SCRIPT
   stop_server
 }
 
+test_zsh_finds_own_bin() {
+  # The first pane of a new server starts before the loader exports
+  # TMUX_AUTONAME_BIN, and the bin is not on PATH.
+  checkout="$WORK/checkout"
+  log="$WORK/own-bin.log"
+  mkdir -p "$checkout/bin" "$checkout/integrations"
+  cp "$REPO_DIR/integrations/tmux-autoname.zsh" "$checkout/integrations/"
+  cat >"$checkout/bin/tmux-autoname" <<SCRIPT
+#!/bin/sh
+printf '%s\\n' "\$*" >>'$log'
+SCRIPT
+  chmod +x "$checkout/bin/tmux-autoname"
+  start_server
+  t send-keys -t w "env -u TMUX_AUTONAME_BIN PS1='%% ' zsh -f -i" Enter
+  wait_cmd zsh
+  t send-keys -t w "source '$checkout/integrations/tmux-autoname.zsh'" Enter
+  sleep 0.5
+  : >"$log"
+  t send-keys -t w 'true' Enter
+  sleep 0.5
+  if grep -q '^sync -t %' "$log"; then
+    pass "zsh: without TMUX_AUTONAME_BIN, syncs with its own checkout's bin"
+  else
+    fail "zsh: without TMUX_AUTONAME_BIN, syncs with its own checkout's bin"
+  fi
+  stop_server
+}
+
 # --- Loader -----------------------------------------------------------------
 
 test_loader_syncs_all_windows() {
@@ -1048,6 +1076,7 @@ run_all() {
   fi
   if command -v zsh >/dev/null 2>&1; then
     test_zsh_cancels_delayed_sync
+    test_zsh_finds_own_bin
   fi
   test_loader_syncs_all_windows
   test_hooks_registered

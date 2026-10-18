@@ -151,7 +151,9 @@ is kept in `@tmux-autoname-computed`, so a name that tmux stores escaped
 
 `@tmux-autoname-bin` is removed: the loader always uses `bin/tmux-autoname`
 of its own checkout and exports it as `TMUX_AUTONAME_BIN` in the global
-environment for the zsh integration.
+environment for the zsh integration. The integration falls back to the
+`bin/tmux-autoname` of its own checkout, because the shell of a new
+server's first pane starts before the loader runs.
 
 ### Runtime
 

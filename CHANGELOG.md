@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+**Fixed:**
+
+- The zsh integration did nothing in the first pane of a new tmux server.
+  That shell starts before the loader exports `TMUX_AUTONAME_BIN`, and the
+  fallback `tmux-autoname` is usually not on `PATH`, so every sync failed
+  without a message and the window kept a stale name. The integration now
+  uses `bin/tmux-autoname` of its own checkout when `TMUX_AUTONAME_BIN` is
+  not set.
+
 ## 1.0.0
 
 A from-scratch rewrite with per-window icons. See
