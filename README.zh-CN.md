@@ -72,13 +72,13 @@ tmux source-file ~/.tmux.conf
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
-## 显示图标
+## 显示图标和手动标记
 
-插件把图标写入窗口选项 `@tmux-autoname-icon`. 它从不把图标放进窗口名, 也从不修改你的状态栏格式, 所以需要你自己把 `#{@tmux-autoname-icon}` 加入两个格式:
+插件把图标写入窗口选项 `@tmux-autoname-icon`. 有 Manual Name 的窗口还会在 `@tmux-autoname-manual` 中得到手动标记 (󰏫, U+F03EB); 自动命名的窗口这个选项为空. 插件从不把它们放进窗口名, 也从不修改你的状态栏格式, 所以需要你自己把它们加入两个格式:
 
 ```tmux
-set -g window-status-format         '#I #{@tmux-autoname-icon} #W'
-set -g window-status-current-format '#I #{@tmux-autoname-icon} #W'
+set -g window-status-format         '#I #{@tmux-autoname-icon} #W#{?@tmux-autoname-manual, #{@tmux-autoname-manual},}'
+set -g window-status-current-format '#I #{@tmux-autoname-icon} #W#{?@tmux-autoname-manual, #{@tmux-autoname-manual},}'
 ```
 
 如果某个主题插件设置了这两个格式, 请把这个标记加入主题的格式, 或在主题加载之后再设置格式.
@@ -174,9 +174,9 @@ tmux-autoname help
 
 - `sync` 设置某个面板或窗口所属窗口的名字和图标, 依据的是该窗口的**活动**面板, 而不是你传入的面板. 钩子和 zsh 集成会调用它; 你很少需要手动执行.
 - `auto` 忘记 Manual Name, 并立即同步.
-- `status` 打印 `name:`, `applied:` (`sync` 最近一次设置的名字), `manual:`, `activity:`, `icon:`, `project:` 和 `task:` 几行.
+- `status` 打印 `name:`, `applied:` (`sync` 最近一次设置的名字), `manual:`, `activity:`, `icon:`, `project:`, `task:` 和 `synced:` (窗口上次同步是多久以前, 或 `never`) 几行. 你正在这个窗口里工作, 而 `synced:` 却是很久以前, 说明同步没有在运行.
 
-Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一直保留, 直到你运行 `tmux-autoname auto`, 或把窗口名改成空字符串 (`tmux rename-window ""`).
+Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一直保留, 直到你运行 `tmux-autoname auto`, 或把窗口名改成空字符串 (`tmux rename-window ""`). 改名会立即设置手动标记, 恢复自动命名会清除它.
 
 ## 选项
 
@@ -184,6 +184,7 @@ Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一
 |---|---|---|
 | `@tmux-autoname-icons` | 空 | 你的 `pattern=icon` 对, 在内置表之前检查 |
 | `@tmux-autoname-icon-default` | U+F018D (󰆍) | 没有模式匹配时的图标 |
+| `@tmux-autoname-manual-mark` | U+F03EB (󰏫) | 手动标记; 设为空值则不显示标记 |
 | `@tmux-autoname-key-auto` | 未设置 | `prefix` 键表中对当前窗口执行 `auto` 的按键 |
 
 在插件加载之前设置:

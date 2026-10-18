@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+See [docs/adr/0008-manual-mark-and-sync-time.md](docs/adr/0008-manual-mark-and-sync-time.md).
+
+**New:**
+
+- The Manual Mark. A window with a Manual Name gets the glyph U+F03EB in
+  the window option `@tmux-autoname-manual`; an automatic window has it
+  empty. A rename sets it at once, and restoring automatic naming clears
+  it. Show it with `#{?@tmux-autoname-manual, #{@tmux-autoname-manual},}`
+  in your formats. `@tmux-autoname-manual-mark` replaces the glyph; an
+  empty value shows no mark.
+- `status` prints `synced:`, how long ago the window was last synced, or
+  `never`. Each sync records the time in `@tmux-autoname-synced`.
+
 ## 2.0.0
 
 Names say the project and the task, not the program. See

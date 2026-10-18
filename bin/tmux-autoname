@@ -19,11 +19,13 @@ FIELDS="#{window_id}${NL}#{pane_id}${NL}#{pane_active}${NL}#{window_name}${NL}\
 #{pane_current_path}${NL}#{session_name}${NL}#{session_path}${NL}\
 #{@tmux-autoname-applied}${NL}#{@tmux-autoname-icon}${NL}\
 #{@tmux-autoname-icons}${NL}#{@tmux-autoname-icon-default}${NL}\
-#{@tmux-autoname-computed}${NL}."
+#{@tmux-autoname-computed}${NL}#{@tmux-autoname-manual}${NL}\
+#{@tmux-autoname-manual-mark}${NL}#{@tmux-autoname-synced}${NL}."
 
 # Sets win pane pane_active name pcmd pane_pid title cwd session session_path
-# applied icon_cur icons icon_default computed from the lines of $1. Fails
-# unless there are exactly 16 lines (a value with a newline in it).
+# applied icon_cur icons icon_default computed manual_cur manual_mark synced
+# from the lines of $1. Fails unless there are exactly 19 lines (a value
+# with a newline in it).
 assign_fields() {
   n=0
   while IFS= read -r line; do
@@ -34,11 +36,12 @@ assign_fields() {
       7) title=$line ;; 8) cwd=$line ;; 9) session=$line ;;
       10) session_path=$line ;; 11) applied=$line ;; 12) icon_cur=$line ;;
       13) icons=$line ;; 14) icon_default=$line ;; 15) computed=$line ;;
+      16) manual_cur=$line ;; 17) manual_mark=$line ;; 18) synced=$line ;;
     esac
   done <<EOF_FIELDS
 $1
 EOF_FIELDS
-  [ "$n" -eq 16 ]
+  [ "$n" -eq 19 ]
 }
 
 # Read the fields of the window's ACTIVE pane. $1 = target (may be empty).
@@ -462,14 +465,23 @@ do_sync() {
   resolve_activity
   icon=$(icon_for "$activity" "$icons" "$icon_default")
 
-  # One tmux call for every write, each only when its value changes.
-  set --
+  # One tmux call for every write; apart from the sync time, each only when
+  # its value changes.
+  set -- set-option -wq -t "$win" @tmux-autoname-synced "$(date +%s)" ';'
   if [ "$icon" != "$icon_cur" ]; then
     batch_word "$icon"
     set -- "$@" set-option -wq -t "$win" @tmux-autoname-icon "$v" ';'
   fi
 
-  if ! is_manual; then
+  if is_manual; then
+    # The after-rename-window hook sets the Manual Mark at once; this keeps
+    # it right on windows that turned manual otherwise. The loader sets the
+    # default @tmux-autoname-manual-mark; an empty one shows no mark.
+    if [ "$manual_mark" != "$manual_cur" ]; then
+      batch_word "$manual_mark"
+      set -- "$@" set-option -wq -t "$win" @tmux-autoname-manual "$v" ';'
+    fi
+  else
     compute_name_record
     compute_name
 
@@ -484,10 +496,12 @@ do_sync() {
     cmds=""
     # tmux stores some bytes escaped ("\\" for "\"), so the stored name can
     # differ from $newname; @tmux-autoname-computed remembers the latter.
+    renamed=""
     if [ "$newname" != "$name" ] && [ "$newname" != "$computed" ]; then
       # rename-window format-expands its argument.
       esc=$(printf '%s' "$newname" | sed 's/#/##/g')
       cmds="rename-window -t $win -- $(cmd_word "$esc") ;"
+      renamed=1
     fi
     if [ "$newname" != "$computed" ]; then
       cmds="$cmds set-option -wq -t $win @tmux-autoname-computed $(cmd_word "$newname") ;"
@@ -502,6 +516,12 @@ do_sync() {
     # would later look like a Manual Name.
     [ -n "$applied" ] ||
       cmds="$cmds set-option -wq -t $win automatic-rename off ;"
+    # The after-rename-window hook runs right after this sync's own
+    # rename-window, before applied is written, and so marks the window
+    # manual: clear the mark after any rename, whatever was read.
+    if [ -n "$renamed" ] || [ -n "$manual_cur" ]; then
+      cmds="$cmds set-option -wq -t $win @tmux-autoname-manual '' ;"
+    fi
     if [ -n "$cmds" ]; then
       cond="#{&&:#{==:#{window_name},$(fmt_lit "$name")},#{==:#{@tmux-autoname-applied},$(fmt_lit "$applied")}}"
       # If the window changed but is still automatic, another sync wrote
@@ -511,7 +531,6 @@ do_sync() {
     fi
   fi
 
-  [ $# -gt 0 ] || return 0
   out=$(tmux "$@" 2>/dev/null) || out=""
   if [ "$out" = retry ] && [ "$retries" -lt 3 ]; then
     do_sync "$win" $((retries + 1))
@@ -554,6 +573,10 @@ cmd_status() {
   compute_name_record
   printf 'project: %s\n' "$project"
   printf 'task: %s\n' "$task"
+  case "$synced" in
+    '' | *[!0-9]*) printf 'synced: never\n' ;;
+    *) printf 'synced: %ss ago\n' "$(($(date +%s) - synced))" ;;
+  esac
 }
 
 cmd_help() {
@@ -573,7 +596,7 @@ sync names a window from its active pane and sets its @tmux-autoname-icon
 from the program that runs there; a window with a Manual Name keeps its
 name and only gets the icon. auto forgets the Manual Name and syncs. status
 prints the window's name, applied name, manual state, Activity, icon,
-Project and Task.
+Project, Task and how long ago it was last synced.
 EOF
 }
 

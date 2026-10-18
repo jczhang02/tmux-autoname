@@ -88,15 +88,17 @@ to `PATH`:
 export PATH="$HOME/.tmux/plugins/tmux-autoname/bin:$PATH"
 ```
 
-## Show the icon
+## Show the icon and the Manual Mark
 
-The plugin sets the icon in the window option `@tmux-autoname-icon`. It
-never puts the icon into the window name and never edits your status
-formats, so add `#{@tmux-autoname-icon}` to both formats yourself:
+The plugin sets the icon in the window option `@tmux-autoname-icon`, and
+the Manual Mark (󰏫, U+F03EB) in `@tmux-autoname-manual` on a window with a
+Manual Name; on an automatic window that option is empty. It never puts
+either into the window name and never edits your status formats, so add
+them to both formats yourself:
 
 ```tmux
-set -g window-status-format         '#I #{@tmux-autoname-icon} #W'
-set -g window-status-current-format '#I #{@tmux-autoname-icon} #W'
+set -g window-status-format         '#I #{@tmux-autoname-icon} #W#{?@tmux-autoname-manual, #{@tmux-autoname-manual},}'
+set -g window-status-current-format '#I #{@tmux-autoname-icon} #W#{?@tmux-autoname-manual, #{@tmux-autoname-manual},}'
 ```
 
 If a theme plugin sets these formats, add the token to the theme's
@@ -244,11 +246,14 @@ tmux-autoname help
   The hooks and the zsh integration call it; you seldom need to.
 - `auto` forgets a Manual Name and syncs at once.
 - `status` prints `name:`, `applied:` (the last name set by `sync`),
-  `manual:`, `activity:`, `icon:`, `project:` and `task:` lines.
+  `manual:`, `activity:`, `icon:`, `project:`, `task:` and `synced:` (how
+  long ago the window was last synced, or `never`) lines. A `synced:` far
+  in the past while you work in the window means syncs are not running.
 
 A Manual Name (tmux's own `prefix` + <kbd>,</kbd>, or `rename-window`)
 stays until you run `tmux-autoname auto` or rename the window to an empty
-string (`tmux rename-window ""`).
+string (`tmux rename-window ""`). The rename sets the Manual Mark at once,
+and restoring automatic naming clears it.
 
 ## Options
 
@@ -256,6 +261,7 @@ string (`tmux rename-window ""`).
 |---|---|---|
 | `@tmux-autoname-icons` | empty | Your `pattern=icon` pairs, checked before the built-in table |
 | `@tmux-autoname-icon-default` | U+F018D (󰆍) | Icon when no pattern matches |
+| `@tmux-autoname-manual-mark` | U+F03EB (󰏫) | Manual Mark; an empty value shows no mark |
 | `@tmux-autoname-key-auto` | unset | Key in the `prefix` table that runs `auto` on the current window |
 
 Set these before the plugin loads:

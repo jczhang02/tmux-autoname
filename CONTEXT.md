@@ -69,6 +69,12 @@ Session may contain one Project or a directory of Projects. Its name
 participates in the session-container rule and the Omitted Project.
 _Avoid_: Project, workspace
 
+**Manual Mark**:
+A single glyph in the window option `@tmux-autoname-manual` while a Window
+has a Manual Name, empty otherwise. tmux's rename hook sets it at once;
+sync keeps it right. Like the Icon, it is never part of the name.
+_Avoid_: Lock, pin badge
+
 **Manual Name**:
 A user-authored window name, set through tmux's own rename (`prefix` + `,`,
 or `rename-window`), that takes precedence over the Automatic Name until

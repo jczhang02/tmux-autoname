@@ -43,6 +43,7 @@ ICON_BUILD=$(printf '\363\260\243\252')     # U+F08EA
 ICON_NETWORK=$(printf '\363\260\226\237')   # U+F059F
 ICON_GITHUB=$(printf '\363\260\212\244')    # U+F02A4
 ICON_TMUX=$(printf '\356\257\210')          # U+EBC8
+MARK_MANUAL=$(printf '\363\260\217\253')    # U+F03EB
 
 PASS=0
 FAIL=0
@@ -732,6 +733,64 @@ test_empty_rename_restores_auto() {
   stop_server
 }
 
+assert_mark() {
+  # $1 = description, $2 = expected Manual Mark, $3 = target (default: w)
+  assert_eq "$1" '#{@tmux-autoname-manual}' "$2" "${3:-w}"
+}
+
+test_manual_mark() {
+  start_server
+  load_plugin
+  sync_now
+  assert_mark "an automatic window has no Manual Mark" ''
+  t rename-window -t w pinned
+  assert_mark "a manual rename sets the Manual Mark at once" "$MARK_MANUAL"
+  sync_now
+  assert_mark "sync keeps the Manual Mark on a manual window" "$MARK_MANUAL"
+  t rename-window -t w ""
+  assert_mark 'rename-window "" clears the Manual Mark' ''
+  stop_server
+}
+
+test_manual_mark_option() {
+  start_server
+  gset @tmux-autoname-manual-mark M
+  load_plugin
+  t rename-window -t w pinned
+  assert_mark "@tmux-autoname-manual-mark replaces the Manual Mark" 'M'
+  stop_server
+
+  start_server
+  gset @tmux-autoname-manual-mark ''
+  load_plugin
+  check "the loader keeps an empty @tmux-autoname-manual-mark" \
+    global_is @tmux-autoname-manual-mark ''
+  t rename-window -t w pinned
+  assert_name "a manual rename with an empty mark" 'pinned'
+  assert_mark "an empty @tmux-autoname-manual-mark shows no mark" ''
+  stop_server
+}
+
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
+global_is() {
+  # $1 = global option, $2 = expected value
+  [ "$(t show-option -gqv "$1")" = "$2" ]
+}
+
+test_automatic_rename_clears_mark() {
+  dir=$(named_dir plain)
+  mkdir -p "$dir/sub"
+  start_server "$dir"
+  load_plugin
+  sync_now
+  cd_pane "$dir/sub"
+  sync_now
+  assert_name "an automatic rename" 'sub'
+  # The rename hook marks the window during sync's own rename.
+  assert_mark "an automatic rename leaves no Manual Mark" ''
+  stop_server
+}
+
 # --- Window and panes -------------------------------------------------------
 
 test_background_pane_does_not_hijack() {
@@ -1012,6 +1071,8 @@ test_hooks_registered() {
   done
   check "after-rename-window is guarded by an empty-name test" \
     hook_has after-rename-window '#{==:#{window_name},}'
+  check "after-rename-window sets the Manual Mark" \
+    hook_has after-rename-window '@tmux-autoname-manual '
   check "sync hooks target the window by id" \
     hook_has after-kill-pane "sync -t '#{window_id}'"
   t new-window -t w: -c "$(named_dir fresh)"
@@ -1118,6 +1179,22 @@ test_status_output() {
   stop_server
 }
 
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via check
+synced_recently() {
+  # $1 = status output
+  printf '%s\n' "$1" | grep -qxE 'synced: [0-9]+s ago'
+}
+
+test_status_synced() {
+  start_server
+  out=$(bin_out status -t w)
+  check "status: synced line before any sync" has_line "$out" 'synced: never'
+  sync_now
+  out=$(bin_out status -t w)
+  check "status: synced line after a sync" synced_recently "$out"
+  stop_server
+}
+
 run_all() {
   test_name_directory_fallback
   test_name_home_directory
@@ -1146,6 +1223,9 @@ run_all() {
   test_manual_rename_keeps_updated_icon
   test_auto_restores_after_manual
   test_empty_rename_restores_auto
+  test_manual_mark
+  test_manual_mark_option
+  test_automatic_rename_clears_mark
   test_background_pane_does_not_hijack
   test_after_kill_pane_syncs_window
   test_break_pane_syncs_new_window
@@ -1166,6 +1246,7 @@ run_all() {
   test_loader_exports_bin
   test_key_auto_binding
   test_status_output
+  test_status_synced
 }
 
 run_all

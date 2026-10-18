@@ -34,12 +34,23 @@ tmux set-hook -g 'after-kill-pane[120]' "$sync_window_cmd"
 # harmlessly, for new-window).
 tmux set-hook -g 'window-linked[120]' "$sync_window_cmd"
 
+# The Manual Mark, unless the user set @tmux-autoname-manual-mark (an empty
+# value shows no mark).
+[ -n "$(tmux show-option -gq @tmux-autoname-manual-mark)" ] ||
+  tmux set-option -gq @tmux-autoname-manual-mark '󰏫'
+
 # `rename-window ""` restores automatic naming; any other rename is a
-# Manual Name that sync keeps until `auto` is run.
+# Manual Name that sync keeps until `auto` is run. That rename sets the
+# Manual Mark at once, in tmux alone. This also runs for sync's own rename,
+# before sync writes @tmux-autoname-applied, so sync clears the mark then.
 # if-shell parses its command again when it runs: a second quoting layer.
 auto_window_cmd="run-shell -b \\\"$(dq "$bin_dq") auto -t '#{window_id}'\\\""
+manual_cond="#{&&:#{@tmux-autoname-applied},#{!=:#{window_name},#{@tmux-autoname-applied}}}"
+# No -t: a target in a hook's if-shell branch is not format-expanded, and
+# the hook's own target is already the renamed window.
+mark_window_cmd="set-option -wqF @tmux-autoname-manual '#{?${manual_cond},#{@tmux-autoname-manual-mark},}'"
 tmux set-hook -g 'after-rename-window[120]' \
-  "if-shell -F '#{==:#{window_name},}' \"${auto_window_cmd}\""
+  "if-shell -F '#{==:#{window_name},}' \"${auto_window_cmd}\" \"${mark_window_cmd}\""
 
 # --- Optional key binding ----------------------------------------------------
 key_auto=$(tmux show-option -gqv @tmux-autoname-key-auto)
