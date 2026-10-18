@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
 
 See [docs/adr/0008-manual-mark-and-sync-time.md](docs/adr/0008-manual-mark-and-sync-time.md).
 
