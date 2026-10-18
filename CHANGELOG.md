@@ -48,6 +48,13 @@ A from-scratch rewrite with per-window icons. See
   longer turns the window into a Manual Name: the applied name is now
   read back from tmux.
 - The hooks work from a checkout path with quotes, `$` or `#`.
+- A rename made while a sync runs is no longer overwritten; a sync that
+  loses to another sync reads again and retries.
+- A name with a backslash is no longer renamed on every sync.
+- `sync` works on tmux 3.4, which prints a control-character field
+  separator as text.
+- The test suite runs under dash (no `exec -a`); CI tests tmux 3.3a, 3.4
+  and 3.5a.
 
 ## 0.7.0
 

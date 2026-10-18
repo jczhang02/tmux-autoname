@@ -41,7 +41,7 @@ This plugin uses a local, deterministic rule instead.
 
 ## Requirements
 
-- tmux 3.3 or newer
+- tmux 3.3 or newer (CI tests 3.3a, 3.4 and 3.5a)
 - POSIX `sh` (the default on Linux and macOS)
 - `git`, optional, for the Git Workspace rule
 - `zsh`, optional, for the recommended `integrations/tmux-autoname.zsh`
@@ -272,4 +272,6 @@ sh test/run.sh
 
 `test/run.sh` starts real, isolated tmux servers (`tmux -L <name>`) and
 drives them with fake processes exec'd under the names it needs, so it
-tests the real hooks, not a copy of them.
+tests the real hooks, not a copy of them. It needs `perl` to set a fake
+process's `argv[0]`, and `git` and `zsh` for the tests that use them. CI
+runs it under dash with tmux 3.3a, 3.4 and 3.5a.

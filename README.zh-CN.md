@@ -31,7 +31,7 @@ Workspace 与会话名相同时为空 (见 `@tmux-autoname-omit-session`). 设�
 
 ## 依赖
 
-- tmux 3.3 及以上
+- tmux 3.3 及以上 (CI 测试 3.3a, 3.4 和 3.5a)
 - POSIX `sh` (Linux 和 macOS 默认自带)
 - `git`, 可选, 用于 Git Workspace 规则
 - `zsh`, 可选, 用于推荐的 `integrations/tmux-autoname.zsh`
@@ -198,4 +198,4 @@ shellcheck tmux-autoname.tmux bin/tmux-autoname test/run.sh
 sh test/run.sh
 ```
 
-`test/run.sh` 启动真实的, 隔离的 tmux server (`tmux -L <name>`), 并用以所需名字 exec 出来的伪造进程驱动它们, 因此测试的是真实的钩子, 而不是它们的副本.
+`test/run.sh` 启动真实的, 隔离的 tmux server (`tmux -L <name>`), 并用以所需名字 exec 出来的伪造进程驱动它们, 因此测试的是真实的钩子, 而不是它们的副本. 测试需要 `perl` 来设置伪造进程的 `argv[0]`, 使用 `git` 和 `zsh` 的测试还需要这两个程序. CI 在 dash 下用 tmux 3.3a, 3.4 和 3.5a 运行测试.

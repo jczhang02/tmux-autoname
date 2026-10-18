@@ -123,6 +123,14 @@ it. `tmux-autoname auto` or
 `rename-window ""` (via the `after-rename-window` hook, guarded by
 `if-shell -F '#{==:#{window_name},}'`) clears it and re-syncs.
 
+`sync` writes the name through `if-shell -F`, which checks inside the server
+that the name and `@tmux-autoname-applied` are still what `sync` read. A
+rename made while a sync runs is therefore never overwritten. When the check
+fails but the window is still automatic (another sync wrote first, maybe from
+older data), `sync` reads again and retries, up to 3 times. The computed name
+is kept in `@tmux-autoname-computed`, so a name that tmux stores escaped
+(`\\` for `\`) is not renamed again on every sync.
+
 ### Commands
 
 - `sync [-t pane_or_window]` - name and icon from the window's ACTIVE pane.
@@ -160,7 +168,8 @@ with `##{window_id}` double-hashed inside `run-shell`.
 sync that has not run yet, so it can't land after the prompt's sync.
 
 Performance: read all pane/window fields in one `tmux display-message -p`
-call; read argv from `/proc` on Linux and `ps` elsewhere; call
+call, one field per line (tmux 3.4 prints a control-character separator as
+text); read argv from `/proc` on Linux and `ps` elsewhere; call
 `rename-window` / `set-option` only when the value changes.
 
 ### Behaviours carried over from 0.7
