@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
-# tmux-autoname: deterministic window names (A:W/R, A:W, A:R or A from
-# Activity, Workspace, Area) and a per-window @tmux-autoname-icon.
-# See docs/adr/0006-rewrite-with-icons.md.
+# tmux-autoname: deterministic window names (P/T, P or T from Project and
+# Task) and a per-window @tmux-autoname-icon chosen from the Activity.
+# See docs/adr/0007-project-and-task-names.md.
 set -euf
 
 # -u: without a UTF-8 locale tmux prints non-ASCII bytes as "_".
@@ -18,13 +18,12 @@ FIELDS="#{window_id}${NL}#{pane_id}${NL}#{pane_active}${NL}#{window_name}${NL}\
 #{pane_current_command}${NL}#{pane_pid}${NL}#{pane_title}${NL}\
 #{pane_current_path}${NL}#{session_name}${NL}#{session_path}${NL}\
 #{@tmux-autoname-applied}${NL}#{@tmux-autoname-icon}${NL}\
-#{@tmux-autoname-area-depth}${NL}#{@tmux-autoname-omit-session}${NL}\
 #{@tmux-autoname-icons}${NL}#{@tmux-autoname-icon-default}${NL}\
 #{@tmux-autoname-computed}${NL}."
 
 # Sets win pane pane_active name pcmd pane_pid title cwd session session_path
-# applied icon_cur depth omit icons icon_default computed from the lines of
-# $1. Fails unless there are exactly 18 lines (a value with a newline in it).
+# applied icon_cur icons icon_default computed from the lines of $1. Fails
+# unless there are exactly 16 lines (a value with a newline in it).
 assign_fields() {
   n=0
   while IFS= read -r line; do
@@ -34,13 +33,12 @@ assign_fields() {
       4) name=$line ;; 5) pcmd=$line ;; 6) pane_pid=$line ;;
       7) title=$line ;; 8) cwd=$line ;; 9) session=$line ;;
       10) session_path=$line ;; 11) applied=$line ;; 12) icon_cur=$line ;;
-      13) depth=$line ;; 14) omit=$line ;; 15) icons=$line ;;
-      16) icon_default=$line ;; 17) computed=$line ;;
+      13) icons=$line ;; 14) icon_default=$line ;; 15) computed=$line ;;
     esac
   done <<EOF_FIELDS
 $1
 EOF_FIELDS
-  [ "$n" -eq 18 ]
+  [ "$n" -eq 16 ]
 }
 
 # Read the fields of the window's ACTIVE pane. $1 = target (may be empty).
@@ -346,47 +344,91 @@ is_under() {
   return 1
 }
 
-# Sets workspace and root (root may be empty).
-compute_workspace() {
-  root=""
+# Sets project, task and fallback, the Name Record of the fields read by
+# read_window and the Activity. project is the remote host, the main Git
+# repository, the directory below a session container, or the session name;
+# task is a branch other than main or master, without a leading
+# "worktree-"; fallback is the name to use when the Project is left out and
+# there is no Task: the remote host, the branch, or the directory name.
+compute_name_record() {
+  project="" task="" fallback=""
   case "$activity" in
     ssh | mosh)
-      workspace=""
-      [ -z "$argv" ] || workspace=$(printf '%s\n' "$argv" | host_from_argv)
-      [ -n "$workspace" ] || workspace=$(host_from_title "$title")
-      [ -z "$workspace" ] || return 0
+      [ -z "$argv" ] || project=$(printf '%s\n' "$argv" | host_from_argv)
+      [ -n "$project" ] || project=$(host_from_title "$title")
+      if [ -n "$project" ]; then
+        fallback=$project
+        return 0
+      fi
       ;;
   esac
-  if [ -n "$session" ] && [ "${session_path##*/}" = "$session" ] &&
-    { [ "$cwd" = "$session_path" ] || is_under "$cwd" "$session_path"; }; then
-    workspace=$session root=$session_path
-    return 0
+  if [ "$cwd" = "${HOME:-}" ] && [ -n "$cwd" ]; then
+    fallback='~'
+  elif [ -n "${cwd##*/}" ]; then
+    fallback=${cwd##*/}
+  else
+    fallback=/
   fi
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
-    top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || top=""
-    if [ -n "$top" ]; then
-      workspace=${top##*/} root=$top
-      return 0
-    fi
+    git_out=$(git -C "$cwd" rev-parse --path-format=absolute --show-toplevel \
+      --git-dir --git-common-dir 2>/dev/null) || git_out=""
+    top="" gitdir="" common=""
+    # Outside Git there is one empty line, so a read hits the end: as part
+    # of an AND-OR list, the group does not trip set -e.
+    {
+      IFS= read -r top
+      IFS= read -r gitdir
+      IFS= read -r common
+    } <<EOF_GIT || true
+$git_out
+EOF_GIT
+    # Git older than 2.31 prints "--path-format=absolute" back as the first
+    # line; that counts as no Git.
+    case "$top" in
+      /*)
+        project=${top##*/}
+        # A linked worktree of an ordinary repository is named after that
+        # repository. A submodule's common dir is <super>/.git/modules/<sub>
+        # and a bare repository's is the repository itself: neither is a
+        # ".git", so their worktrees keep their own toplevel names.
+        if [ "$gitdir" != "$common" ] && [ "${common##*/}" = .git ]; then
+          main_repo=${common%/.git}
+          project=${main_repo##*/}
+        fi
+        # symbolic-ref also names an unborn branch; the full ref avoids the
+        # "heads/" that --short adds when a tag has the same name.
+        branch=$(git -C "$cwd" symbolic-ref -q HEAD 2>/dev/null) || branch=""
+        branch=${branch#refs/heads/}
+        [ -z "$branch" ] || fallback=$branch
+        case "$branch" in
+          '' | main | master) ;;
+          worktree-?*) task=${branch#worktree-} ;;
+          *) task=$branch ;;
+        esac
+        return 0
+        ;;
+    esac
   fi
-  workspace=$session
+  if [ -n "$session" ] && [ "${session_path##*/}" = "$session" ] &&
+    is_under "$cwd" "$session_path"; then
+    rel=${cwd#"$session_path"/}
+    project=${rel%%/*}
+    return 0
+  fi
+  project=$session
 }
 
-# Area: cwd relative to root, when strictly under it, capped to the first
-# $3 segments (0 = unlimited).
-compute_area() {
-  # $1 = cwd, $2 = root, $3 = depth
-  is_under "$1" "$2" || return 0
-  rel=${1#"$2"/}
-  kept=""
-  n=0
-  while [ "$3" -eq 0 ] || [ "$n" -lt "$3" ]; do
-    n=$((n + 1))
-    seg=${rel%%/*}
-    kept=${kept:+$kept/}$seg
-    case "$rel" in */*) rel=${rel#*/} ;; *) break ;; esac
-  done
-  printf '%s' "$kept"
+# Sets newname from the Name Record (project, task, fallback) and session:
+# P/T or P when the Project differs from the session name, else T, else
+# the fallback.
+compute_name() {
+  if [ "$project" != "$session" ]; then
+    newname=$project${task:+/$task}
+  elif [ -n "$task" ]; then
+    newname=$task
+  else
+    newname=$fallback
+  fi
 }
 
 # Sets v to $1 made safe as a word of a batched tmux call: tmux takes a
@@ -403,9 +445,10 @@ fmt_lit() {
   printf '%s' "$1" | sed -e 's/#/##/g' -e 's/,/#,/g' -e 's/}/#}/g'
 }
 
-# $1 as one double-quoted word of a tmux command string.
+# $1 as one double-quoted word of a tmux command string. tmux expands a
+# leading "~" even inside double quotes, so it is escaped too.
 cmd_word() {
-  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"$]/\\&/g')"
+  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"$]/\\&/g' -e 's/^~/\\~/')"
 }
 
 is_manual() {
@@ -427,20 +470,8 @@ do_sync() {
   fi
 
   if ! is_manual; then
-    compute_workspace
-    case "$depth" in '' | *[!0-9]*) depth=1 ;; esac
-    area=$(compute_area "$cwd" "$root" "$depth")
-    case "$omit" in off | no | false | 0) ;; *) [ "$workspace" != "$session" ] || workspace="" ;; esac
-
-    if [ -n "$workspace" ] && [ -n "$area" ]; then
-      newname="$activity:$workspace/$area"
-    elif [ -n "$workspace" ]; then
-      newname="$activity:$workspace"
-    elif [ -n "$area" ]; then
-      newname="$activity:$area"
-    else
-      newname=$activity
-    fi
+    compute_name_record
+    compute_name
 
     # tmux rejects a name with a control character.
     case "$newname" in
@@ -520,12 +551,17 @@ cmd_status() {
   printf 'manual: %s\n' "$manual"
   printf 'activity: %s\n' "$activity"
   printf 'icon: %s\n' "$(icon_for "$activity" "$icons" "$icon_default")"
+  compute_name_record
+  printf 'project: %s\n' "$project"
+  printf 'task: %s\n' "$task"
 }
 
 cmd_help() {
   cat <<'EOF'
-tmux-autoname: deterministic window names: A:W/R, A:W, A:R or A, from the
-Activity A, Workspace W and Area R.
+tmux-autoname: deterministic window names: P/T, P or T, from the Project P
+and the Task T (a branch other than main or master). A Project equal to the
+session name is left out; with neither, the name is the branch, else the
+directory name (~ for the home directory).
 
 Usage:
   tmux-autoname sync [-t pane_or_window]
@@ -533,10 +569,11 @@ Usage:
   tmux-autoname status [-t window]
   tmux-autoname help
 
-sync names a window from its active pane and sets its @tmux-autoname-icon;
-a window with a Manual Name keeps its name and only gets the icon. auto
-forgets the Manual Name and syncs. status prints the window's name,
-applied name, manual state, Activity and icon.
+sync names a window from its active pane and sets its @tmux-autoname-icon
+from the program that runs there; a window with a Manual Name keeps its
+name and only gets the icon. auto forgets the Manual Name and syncs. status
+prints the window's name, applied name, manual state, Activity, icon,
+Project and Task.
 EOF
 }
 

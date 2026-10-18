@@ -4,31 +4,32 @@ English | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-tmux-autoname names tmux windows deterministically from what is running
-and where, and gives each window an icon for that program. No model calls,
-no screen capture, no API key, no daemon.
+tmux-autoname names tmux windows deterministically after the project and
+the task they work on, and gives each window an icon for the program that
+runs in it. No model calls, no screen capture, no API key, no daemon.
 
 ```text
-claude:tmux-autoname                      Workspace differs from the session name
-zsh:partjobs/patent-value-identification  omit-session off
-claude:paxc-approx-dnn                    session partjobs, pane in ~/dev/partjobs/paxc-approx-dnn
-claude                                    session gig, pane at the session root
-ssh:gentoo-box                            remote host as Workspace
+patent-value-identification                           session partjobs, on main
+patent-value-identification/ch4-selector-improvement  session partjobs, on branch ch4-selector-improvement
+paxc-approx-dnn/report-clarity                        session partjobs, worktree report-clarity
+ch4-selector-improvement                              session patent-value-identification
+main                                                  session tmux-autoname, on main
+gentoo-box                                            ssh gentoo-box
 ```
 
-The name is built from the Activity `A`, the Workspace `W`, and the Area
-`R`:
+The name is built from the Project `P` and the Task `T`. The Task is the
+current branch, unless it is `main` or `master`:
 
-| Workspace | Area | Name |
+| P differs from the session name | Task | Name |
 |---|---|---|
-| set | set | `A:W/R` |
-| set | empty | `A:W` |
-| empty | set | `A:R` |
-| empty | empty | `A` |
+| yes | set | `P/T` |
+| yes | none | `P` |
+| no | set | `T` |
+| no | none | the branch, else the directory name |
 
-The Workspace is empty when it equals the session name (see
-`@tmux-autoname-omit-session`). The design is recorded in
-[docs/adr/0006-rewrite-with-icons.md](docs/adr/0006-rewrite-with-icons.md);
+The program is not part of the name; the icon shows it. The design is
+recorded in
+[docs/adr/0007-project-and-task-names.md](docs/adr/0007-project-and-task-names.md);
 the terms are defined in [CONTEXT.md](CONTEXT.md).
 
 ## Why this exists
@@ -37,13 +38,16 @@ Earlier versions inferred a task from screen text with an LLM, then
 mirrored the title a coding agent sets for itself. Both were dropped:
 inferred tasks described the current step, not the goal, and agent titles
 changed with pane focus and made windows in one session look the same.
-This plugin uses a local, deterministic rule instead.
+This plugin uses a local, deterministic rule instead. A window usually does
+one task in one project, and the task usually has its own branch, so the
+name says those two things.
 
 ## Requirements
 
 - tmux 3.3 or newer (CI tests 3.3a, 3.4 and 3.5a)
 - POSIX `sh` (the default on Linux and macOS)
-- `git`, optional, for the Git Workspace rule
+- `git` 2.31 or newer, optional, for the Project and the Task; older Git
+  is treated as no Git
 - `zsh`, optional, for the recommended `integrations/tmux-autoname.zsh`
 - a [Nerd Font](https://www.nerdfonts.com/), optional, for the icons
 
@@ -125,7 +129,34 @@ exports the variable), else `tmux-autoname` on `PATH`.
 
 All parts come from the window's ACTIVE pane.
 
-- **Activity** is `pane_current_command`: basename, lower-cased, with a
+- **Project** is the first that applies:
+  1. **Remote host.** For `ssh` and `mosh`, the remote host, lower-cased.
+     The name is the host alone. It is read from the foreground process's
+     argv: options (and their values) are skipped, the first positional is
+     taken, and a `user@` prefix, an `ssh://` scheme and a `:port` are
+     removed. For `mosh-client`, or when argv gives nothing, the host is
+     parsed from the pane title. Without `/proc` (macOS), argv comes from
+     `ps`, which joins arguments with spaces, so an argument that contains
+     a space (`-o 'Opt value'`) can shift the host.
+  2. **Git repository.** The basename of `git rev-parse --show-toplevel`.
+     A linked worktree is named after its main repository: a worktree in
+     `paxc-approx-dnn/.claude/worktrees/report-clarity` has the Project
+     `paxc-approx-dnn`. A submodule keeps its own name.
+  3. **Session container.** Outside Git, if the basename of
+     `#{session_path}` equals the session name and the pane path is under
+     that directory: the first directory below it.
+  4. **Session name.**
+- **Task** is the current branch, unless it is `main` or `master` or HEAD
+  is detached. A leading `worktree-`, the prefix Claude Code gives
+  worktree branches, is removed.
+- A Project equal to the session name is left out. With neither Project
+  nor Task, the name is the current branch (`main`), or, outside Git, the
+  directory name (`~` for the home directory).
+- Subdirectories are not part of the name. Two windows in one project on
+  one branch have the same name; name one of them by hand
+  (`prefix` + <kbd>,</kbd>).
+- **Activity** is the program that runs, used for the icon and printed by
+  `status`: `pane_current_command`, basename, lower-cased, with a
   `-coding-agent` suffix removed (`pi-coding-agent` is `pi`), and only
   `[a-z0-9._+-]` kept; an empty result is `shell`. A launcher (`sudo`,
   `doas`, `env`, `nice`, `timeout`, `systemd-run`, ...) or an interpreter
@@ -134,38 +165,13 @@ All parts come from the window's ACTIVE pane.
   is `emerge`, `node .../bin/codex` is `codex`, `python3 -m http.server`
   is `http.server`. An interpreter with no script (a REPL, `-e`, `-c`)
   keeps its own name. `mosh-client` is `mosh`.
-- **Workspace** is the first rule that applies:
-  1. **Remote host.** For `ssh` and `mosh`, the remote host, lower-cased.
-     It is read from the foreground process's argv: options (and their
-     values) are skipped, the first positional is taken, and a `user@`
-     prefix, an `ssh://` scheme and a `:port` are removed. For
-     `mosh-client`, or when argv gives nothing, the host is parsed from
-     the pane title. There is no Area. Without `/proc` (macOS), argv
-     comes from `ps`, which joins arguments with spaces, so an argument
-     that contains a space (`-o 'Opt value'`) can shift the host.
-  2. **Session container.** If the basename of `#{session_path}` equals
-     the session name, and the pane path is that directory or under it:
-     the session name, with `#{session_path}` as root.
-  3. **Git repository.** The basename of `git rev-parse --show-toplevel`,
-     with the toplevel as root. In a linked worktree this is the worktree
-     directory's name.
-  4. **Session name.** The session name, with no root.
-- **Area** is the pane path relative to the Workspace root, when the pane
-  is strictly under that root. It keeps the first
-  `@tmux-autoname-area-depth` path segments (default `1`; `0` keeps the
-  full relative path). There is no Area without a root.
-- **Omit session.** With `@tmux-autoname-omit-session on` (the default), a
-  Workspace equal to the session name is left out: `claude` instead of
-  `claude:partjobs`, `zsh:patent-value-identification` instead of
-  `zsh:partjobs/patent-value-identification`. Thus `A:x` alone does not
-  tell if `x` is a Workspace or an Area.
 
 ## Icons
 
 Every `sync` sets `@tmux-autoname-icon` from the Activity, also on a
 window with a Manual Name: a Manual Name changes only the name, and the
-icon still shows what runs in the window. The built-in table covers
-many programs.
+icon still shows what runs in the window. The icon is the only place that
+shows the program, so the built-in table covers many programs.
 
 The icon is matched against the resolved Activity with sh `case` globs.
 The first match wins, in this order:
@@ -238,7 +244,7 @@ tmux-autoname help
   The hooks and the zsh integration call it; you seldom need to.
 - `auto` forgets a Manual Name and syncs at once.
 - `status` prints `name:`, `applied:` (the last name set by `sync`),
-  `manual:`, `activity:` and `icon:` lines.
+  `manual:`, `activity:`, `icon:`, `project:` and `task:` lines.
 
 A Manual Name (tmux's own `prefix` + <kbd>,</kbd>, or `rename-window`)
 stays until you run `tmux-autoname auto` or rename the window to an empty
@@ -248,8 +254,6 @@ string (`tmux rename-window ""`).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `@tmux-autoname-area-depth` | `1` | Path segments of the Area to keep; `0` keeps the full relative path |
-| `@tmux-autoname-omit-session` | `on` | Leave out a Workspace equal to the session name; `off` keeps it |
 | `@tmux-autoname-icons` | empty | Your `pattern=icon` pairs, checked before the built-in table |
 | `@tmux-autoname-icon-default` | U+F018D (󰆍) | Icon when no pattern matches |
 | `@tmux-autoname-key-auto` | unset | Key in the `prefix` table that runs `auto` on the current window |
@@ -257,7 +261,6 @@ string (`tmux rename-window ""`).
 Set these before the plugin loads:
 
 ```tmux
-set -g @tmux-autoname-area-depth 0
 set -g @tmux-autoname-key-auto 'M-a'
 ```
 
@@ -275,6 +278,21 @@ Neither needs the plugin's path. tmux-palette reads user items only from
 `~/.config/tmux-palette/commands.json`, so copy the two items into that
 array; the plugin does not edit it.
 
+## Upgrading to 2.0
+
+2.0 changes what a name says (see
+[ADR 0007](docs/adr/0007-project-and-task-names.md)).
+
+- Names no longer start with the program: `claude:paxc-approx-dnn` is now
+  `paxc-approx-dnn`. The icon shows the program.
+- A branch other than `main` or `master` is the Task:
+  `patent-value-identification/ch4-selector-improvement`.
+- Subdirectories are no longer part of the name.
+- `@tmux-autoname-area-depth` and `@tmux-autoname-omit-session` are
+  removed. Delete them from your config.
+- If your status format shows `#W`, a long `P/T` name can be cut there
+  with `#{=/24/…:window_name}`.
+
 ## Upgrading to 1.0
 
 1.0 is a rewrite and does not migrate older installs.
@@ -282,7 +300,7 @@ array; the plugin does not edit it.
 - The separator after the Activity is now always `:`. Pre-1.0 builds
   with omit-session on gave `zsh/src`; 1.0 gives `zsh:src`.
 - `@tmux-autoname-omit-session` is `on` by default. Set it to `off` to
-  keep the Workspace in every name, as 0.7 always did.
+  keep the Workspace in every name, as 0.7 always did. (Removed in 2.0.)
 - `@tmux-autoname-bin` is removed. Delete it from your config.
 - Add `#{@tmux-autoname-icon}` to your formats (see
   [Show the icon](#show-the-icon)). If your formats had a
@@ -298,8 +316,12 @@ See [CHANGELOG.md](CHANGELOG.md).
 - Without the zsh integration, the name and icon only update on tmux's own
   window, pane and session events, not on a new foreground command or a
   `cd` in the same pane.
-- Only `git` is used for the Workspace; other version-control systems
-  fall back to the session-container rule or the session name.
+- Only `git` is used for the Project and the Task; other version-control
+  systems fall back to the session-container rule or the session name.
+- A program that switches the branch or enters a worktree while it runs
+  (a coding agent, for example) changes the name only at the next tmux
+  event (a window or pane change) or when it exits. No hook fires while
+  it runs.
 - The remote host is the name given to `ssh` (for example a `Host` alias
   from `~/.ssh/config`), not the resolved `HostName`.
 

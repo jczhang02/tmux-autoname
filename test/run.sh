@@ -35,7 +35,6 @@ ICON_FILES=$(printf '\363\260\211\213')   # U+F024B
 ICON_PAGER=$(printf '\363\260\210\231')   # U+F0219
 ICON_SHELL=$(printf '\357\222\211')       # U+F489
 ICON_DEFAULT=$(printf '\363\260\206\215') # U+F018D
-
 ICON_GENTOO=$(printf '\357\214\215')        # U+F30D
 ICON_NODE=$(printf '\363\260\216\231')      # U+F0399
 ICON_CONTAINER=$(printf '\363\260\241\250') # U+F0868
@@ -90,17 +89,20 @@ SCRIPT
 
 TESTN=0
 new_server() {
-  # $1 = session name, $2 = cwd for its first window
+  # $1 = session name, $2 = cwd for its first window, $3 = HOME of the
+  # server, which run-shell and so sync get (default: this HOME)
   TESTN=$((TESTN + 1))
   SOCK="tmux-autoname-test-$$-$TESTN"
   SERVERS="$SERVERS $SOCK"
-  t -f /dev/null new-session -d -s "$1" -x 200 -y 50 -c "$2"
+  env HOME="${3:-$HOME}" tmux -u -L "$SOCK" -f /dev/null new-session -d \
+    -s "$1" -x 200 -y 50 -c "$2"
 }
 
 start_server() {
-  # $1 = cwd for the initial window (default: a fresh non-git directory).
-  # The session is "w", which never matches the cwd's basename.
-  new_server w "${1:-$(fixture)}"
+  # $1 = cwd for the initial window (default: a fresh non-git directory
+  # named "plain", which is then the window's name). The session is "w",
+  # which never matches the cwd's basename.
+  new_server w "${1:-$(named_dir plain)}"
 }
 
 stop_server() {
@@ -112,9 +114,16 @@ fixture() {
   mktemp -d "$WORK/fx.XXXXXX"
 }
 
+named_dir() {
+  # Print a fresh directory named $1, outside any git repository.
+  d="$(fixture)/$1"
+  mkdir -p "$d"
+  printf '%s' "$d"
+}
+
 init_repo() {
   # $1 = directory to turn into a git repo with one commit
-  git -C "$1" init -q
+  git -C "$1" init -q -b main
   git -C "$1" -c core.hooksPath=/dev/null -c user.name=test \
     -c user.email=test@example.invalid commit -q --allow-empty -m "chore: init"
 }
@@ -253,6 +262,17 @@ assert_icon() {
   assert_eq "$1" '#{@tmux-autoname-icon}' "$2" "${3:-w}"
 }
 
+assert_activity() {
+  # $1 = description, $2 = expected Activity, $3 = target (default: w)
+  check "$1" status_has "${3:-w}" "activity: $2"
+}
+
+cd_pane() {
+  # $1 = directory, $2 = target pane (default: w). Waits for the cd.
+  t send-keys -t "${2:-w}" "cd '$1'" Enter
+  wait_for '#{pane_current_path}' "$1" "${2:-w}" || true
+}
+
 check() {
   # $1 = description; the rest is a command that must succeed
   desc=$1
@@ -276,140 +296,175 @@ fail() {
 
 # --- Name grammar -----------------------------------------------------------
 
-test_name_activity_only() {
+test_name_directory_fallback() {
   start_server
   load_plugin
   start_fake claude
   sync_now
-  assert_name "A: workspace equal to the session is omitted by default" 'claude'
+  assert_name "no Project, Task or Git: the directory name" 'plain'
   stop_server
 }
 
-test_name_omit_session_off() {
-  start_server
-  gset @tmux-autoname-omit-session off
-  load_plugin
-  start_fake claude
+test_name_home_directory() {
+  home=$(named_dir home)
+  new_server w "$home" "$home"
   sync_now
-  assert_name "A:W: omit-session off keeps the session workspace" 'claude:w'
+  assert_name "the home directory is named ~" '~'
   stop_server
 }
 
-test_name_session_container_area() {
+test_name_session_container() {
   base=$(fixture)
-  mkdir -p "$base/partjobs/patent-value-identification"
+  mkdir -p "$base/partjobs/patent-value-identification/manuscript" \
+    "$base/partjobs/notes/sub"
+  init_repo "$base/partjobs/patent-value-identification"
   # session_path is the session's first cwd, so it must be the directory
   # named like the session for the session-container rule to apply.
   new_server partjobs "$base/partjobs"
   load_plugin
-  t send-keys -t partjobs:0 "cd $base/partjobs/patent-value-identification" Enter
-  start_fake zsh partjobs:0
   sync_now partjobs:0
-  assert_name "A:R: session container, omit-session on" \
-    'zsh:patent-value-identification' partjobs:0
-  gset @tmux-autoname-omit-session off
-  sync_now partjobs:0
-  assert_name "A:W/R: session container, omit-session off" \
-    'zsh:partjobs/patent-value-identification' partjobs:0
-  stop_server
-}
-
-test_name_session_container_root() {
-  base=$(fixture)
-  mkdir -p "$base/tmux-autoname"
-  new_server tmux-autoname "$base/tmux-autoname"
-  load_plugin
-  start_fake claude tmux-autoname:0
-  sync_now tmux-autoname:0
-  assert_name "A: session-container root, omit-session on" 'claude' tmux-autoname:0
-  gset @tmux-autoname-omit-session off
-  sync_now tmux-autoname:0
-  assert_name "A:W: session-container root has no area" \
-    'claude:tmux-autoname' tmux-autoname:0
-  stop_server
-}
-
-test_name_session_container_beats_git() {
-  base=$(fixture)
-  mkdir -p "$base/partjobs/paxc-approx-dnn"
-  init_repo "$base/partjobs/paxc-approx-dnn"
-  new_server partjobs "$base/partjobs"
-  load_plugin
-  t new-window -t partjobs: -c "$base/partjobs/paxc-approx-dnn"
+  assert_name "a session-container root without Git: the directory name" \
+    'partjobs' partjobs:0
+  t new-window -t partjobs: -c "$base/partjobs/patent-value-identification/manuscript"
   start_fake claude partjobs:1
   sync_now partjobs:1
-  assert_name "session container wins over a git repo inside it" \
-    'claude:paxc-approx-dnn' partjobs:1
-  gset @tmux-autoname-omit-session off
-  sync_now partjobs:1
-  assert_name "session container wins over git, omit-session off" \
-    'claude:partjobs/paxc-approx-dnn' partjobs:1
+  assert_name "P: a Git project on main, its subdirectory left out" \
+    'patent-value-identification' partjobs:1
+  t new-window -t partjobs: -c "$base/partjobs/notes/sub"
+  sync_now partjobs:2
+  assert_name "P: without Git, the first directory below the container" \
+    'notes' partjobs:2
   stop_server
 }
 
-test_name_git_workspace() {
+test_name_task_branch() {
+  base=$(fixture)
+  mkdir -p "$base/partjobs/pvi/src"
+  init_repo "$base/partjobs/pvi"
+  git -C "$base/partjobs/pvi" checkout -q -b ch4-selector
+  new_server partjobs "$base/partjobs"
+  load_plugin
+  t new-window -t partjobs: -c "$base/partjobs/pvi"
+  sync_now partjobs:1
+  assert_name "P/T: a task branch in a session container" \
+    'pvi/ch4-selector' partjobs:1
+  stop_server
+
+  new_server pvi "$base/partjobs/pvi"
+  load_plugin
+  sync_now pvi:0
+  assert_name "T: a Project equal to the session name is left out" \
+    'ch4-selector' pvi:0
+  git -C "$base/partjobs/pvi" checkout -q main
+  sync_now pvi:0
+  assert_name "neither Project nor Task: the branch" 'main' pvi:0
+  t new-window -t pvi: -c "$base/partjobs/pvi/src"
+  sync_now pvi:1
+  assert_name "a subdirectory does not change the name" 'main' pvi:1
+  git -C "$base/partjobs/pvi" checkout -q --detach
+  sync_now pvi:0
+  assert_name "neither Project, Task nor branch: the directory name" \
+    'pvi' pvi:0
+  stop_server
+}
+
+test_name_branch_edge_cases() {
+  base=$(fixture)
+  mkdir -p "$base/partjobs/unborn" "$base/partjobs/tagged"
+  # A branch with no commit yet is still a Task.
+  git -C "$base/partjobs/unborn" init -q -b feature
+  init_repo "$base/partjobs/tagged"
+  git -C "$base/partjobs/tagged" checkout -q -b v1
+  git -C "$base/partjobs/tagged" tag v1
+  new_server partjobs "$base/partjobs"
+  load_plugin
+  t new-window -t partjobs: -c "$base/partjobs/unborn"
+  sync_now partjobs:1
+  assert_name "a branch with no commit yet is the Task" \
+    'unborn/feature' partjobs:1
+  t new-window -t partjobs: -c "$base/partjobs/tagged"
+  sync_now partjobs:2
+  assert_name "a branch named like a tag has no heads/ prefix" \
+    'tagged/v1' partjobs:2
+  git -C "$base/partjobs/tagged" checkout -q -b worktree-
+  sync_now partjobs:2
+  assert_name "a branch named only worktree- keeps its name" \
+    'tagged/worktree-' partjobs:2
+  stop_server
+}
+
+test_name_old_git() {
+  fake="$WORK/old-git"
+  mkdir -p "$fake"
+  # Git older than 2.31 prints an unknown --path-format option back.
+  cat >"$fake/git" <<SCRIPT
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in --path-format=*) printf '%s\\n' "\$a" ;; esac
+done
+exec '$(command -v git)' "\$@"
+SCRIPT
+  chmod +x "$fake/git"
+  base=$(fixture)
+  mkdir -p "$base/bar"
+  init_repo "$base/bar"
+  git -C "$base/bar" checkout -q -b feat
+  start_server "$base/bar"
+  TMUX="$(sock_path),0,0" PATH="$fake:$PATH" "$BIN" sync -t w \
+    >/dev/null 2>&1 || true
+  assert_name "Git older than 2.31 counts as no Git" 'bar'
+  stop_server
+}
+
+test_name_git_project() {
   base=$(fixture)
   mkdir -p "$base/foo" "$base/bar/src"
   init_repo "$base/bar"
   # Session "dev" starts at .../foo: basename "foo" is not "dev", so the
-  # session-container rule does not apply and the git repo wins.
+  # session-container rule does not apply.
   new_server dev "$base/foo"
   load_plugin
-  t new-window -t dev: -c "$base/bar"
+  t new-window -t dev: -c "$base/bar/src"
   start_fake nvim dev:1
   sync_now dev:1
-  assert_name "A:W: git workspace at the repo root, omit-session on" 'nvim:bar' dev:1
-  t new-window -t dev: -c "$base/bar/src"
-  start_fake nvim dev:2
-  sync_now dev:2
-  assert_name "A:W/R: git workspace with area, omit-session on" 'nvim:bar/src' dev:2
+  assert_name "P: a Git project that differs from the session" 'bar' dev:1
   stop_server
 }
 
-test_name_git_linked_worktree() {
+test_name_linked_worktree() {
   base=$(fixture)
-  mkdir -p "$base/bar"
-  init_repo "$base/bar"
-  git -C "$base/bar" -c core.hooksPath=/dev/null worktree add -q \
-    -b feature "$base/bar-feature"
-  mkdir -p "$base/bar-feature/src"
-  start_server "$base/bar-feature/src"
+  mkdir -p "$base/partjobs/paxc"
+  init_repo "$base/partjobs/paxc"
+  wt="$base/partjobs/paxc/.claude/worktrees/report-clarity"
+  git -C "$base/partjobs/paxc" worktree add -q -b worktree-report-clarity "$wt"
+  new_server partjobs "$base/partjobs"
   load_plugin
-  start_fake zsh
-  sync_now
-  assert_name "linked worktree: workspace is the worktree directory" 'zsh:bar-feature/src'
+  t new-window -t partjobs: -c "$wt"
+  sync_now partjobs:1
+  assert_name "a linked worktree: main repository, branch without worktree-" \
+    'paxc/report-clarity' partjobs:1
+  stop_server
+
+  new_server paxc "$base/partjobs/paxc"
+  load_plugin
+  t new-window -t paxc: -c "$wt"
+  sync_now paxc:1
+  assert_name "a linked worktree in its repository's session: the Task" \
+    'report-clarity' paxc:1
   stop_server
 }
 
-test_name_session_name_workspace() {
+test_name_submodule() {
   base=$(fixture)
-  mkdir -p "$base/sub/deeper"
-  start_server "$base/sub/deeper"
-  gset @tmux-autoname-omit-session off
+  mkdir -p "$base/libsrc" "$base/super"
+  init_repo "$base/libsrc"
+  init_repo "$base/super"
+  git -C "$base/super" -c protocol.file.allow=always submodule add -q \
+    "$base/libsrc" lib >/dev/null 2>&1
+  start_server "$base/super/lib"
   load_plugin
   sync_now
-  assert_name "session-name workspace has no root, so no area" 'sh:w'
-  gset @tmux-autoname-omit-session on
-  sync_now
-  assert_name "session-name workspace omitted, no area" 'sh'
-  stop_server
-}
-
-test_area_depth() {
-  base=$(fixture)
-  mkdir -p "$base/bar/src/utils/deep"
-  init_repo "$base/bar"
-  start_server "$base/bar/src/utils/deep"
-  load_plugin
-  start_fake zsh
-  sync_now
-  assert_name "area capped to its first segment by default (depth 1)" 'zsh:bar/src'
-  gset @tmux-autoname-area-depth 2
-  sync_now
-  assert_name "area capped to two segments with depth 2" 'zsh:bar/src/utils'
-  gset @tmux-autoname-area-depth 0
-  sync_now
-  assert_name "area kept in full with depth 0 (unlimited)" 'zsh:bar/src/utils/deep'
+  assert_name "a submodule keeps its own name" 'lib'
   stop_server
 }
 
@@ -419,7 +474,7 @@ test_ssh_host_from_argv() {
   base=$(fixture)
   mkdir -p "$base/bar/src"
   init_repo "$base/bar"
-  # The pane's cwd is inside a repo: the remote host still wins, no area.
+  # The pane's cwd is inside a repo: the remote host still wins, no Task.
   start_server "$base/bar/src"
   load_plugin
   # argv: ssh -c <script> -p 22 -i key jc@Gentoo-Box uptime; -c, -p and -i
@@ -427,24 +482,24 @@ test_ssh_host_from_argv() {
   start_fake ssh w:0 '-p 22 -i key jc@Gentoo-Box uptime'
   sync_now w:0
   assert_name "ssh host from argv: options skipped, user@ stripped, lower-cased" \
-    'ssh:gentoo-box' w:0
+    'gentoo-box' w:0
   assert_icon "ssh gets the remote icon" "$ICON_REMOTE" w:0
   t new-window -t w: -c "$base/bar/src"
   start_fake ssh w:1 '-o BatchMode=yes ssh://jc@Build-Host:2222'
   sync_now w:1
   assert_name "ssh host from argv: ssh:// scheme and :port stripped" \
-    'ssh:build-host' w:1
+    'build-host' w:1
   # -ljc: the value is attached, though "c" alone would also take one.
   t new-window -t w: -c "$base/bar/src"
   start_fake ssh w:2 '-ljc Gentoo-Box'
   sync_now w:2
   assert_name "ssh host from argv: a value attached in a cluster" \
-    'ssh:gentoo-box' w:2
+    'gentoo-box' w:2
   t new-window -t w: -c "$base/bar/src"
   start_fake ssh w:3 '-vl jc Gentoo-Box'
   sync_now w:3
   assert_name "ssh host from argv: a cluster ending in -l takes the next arg" \
-    'ssh:gentoo-box' w:3
+    'gentoo-box' w:3
   stop_server
 }
 
@@ -455,7 +510,7 @@ test_ssh_host_from_title() {
   start_fake ssh
   set_title 'jc@Gentoo-Box: ~'
   sync_now
-  assert_name "ssh host falls back to pane_title when argv has none" 'ssh:gentoo-box'
+  assert_name "ssh host falls back to pane_title when argv has none" 'gentoo-box'
   stop_server
 }
 
@@ -467,7 +522,7 @@ test_mosh_host_from_argv() {
   start_fake mosh w '--ssh=ssh jc@Gentoo-Box'
   set_title 'jc@thinkpad: ~'
   sync_now
-  assert_name "mosh host from argv, not the local host in pane_title" 'mosh:gentoo-box'
+  assert_name "mosh host from argv, not the local host in pane_title" 'gentoo-box'
   stop_server
 }
 
@@ -478,7 +533,7 @@ test_mosh_host_from_title() {
   start_fake mosh-client w '10.0.0.1 60001'
   set_title 'jc@Gentoo-Box: ~'
   sync_now
-  assert_name "mosh-client is mosh, host from pane_title not argv" 'mosh:gentoo-box'
+  assert_name "mosh-client is mosh, host from pane_title not argv" 'gentoo-box'
   assert_icon "mosh gets the remote icon" "$ICON_REMOTE"
   stop_server
 }
@@ -490,7 +545,7 @@ test_activity_coding_agent_stripped() {
   load_plugin
   start_fake pi-coding-agent
   sync_now
-  assert_name "pi-coding-agent activity strips the -coding-agent suffix" 'pi'
+  assert_activity "pi-coding-agent activity strips the -coding-agent suffix" 'pi'
   assert_icon "pi gets the agent icon" "$ICON_AGENT"
   stop_server
 }
@@ -500,7 +555,7 @@ test_activity_sanitized() {
   load_plugin
   start_fake Foo:Bar_1
   sync_now
-  assert_name "activity lower-cased, characters outside [a-z0-9._+-] dropped" 'foobar_1'
+  assert_activity "activity lower-cased, characters outside [a-z0-9._+-] dropped" 'foobar_1'
   stop_server
 }
 
@@ -513,7 +568,7 @@ test_node_script_resolves_to_program() {
   t send-keys -t w "exec $FAKE_DIR/as node sh -s $FAKE_DIR/pkg/bin/codex" Enter
   wait_cmd node
   sync_now
-  assert_name "node running a CLI script resolves to the script name" 'codex'
+  assert_activity "node running a CLI script resolves to the script name" 'codex'
   assert_icon "the resolved program picks the icon" "$ICON_CODEX"
   stop_server
 }
@@ -525,7 +580,7 @@ test_launcher_resolves_to_command() {
   t send-keys -t w "exec $FAKE_DIR/as doas sh -s emerge -auDvN" Enter
   wait_cmd doas
   sync_now
-  assert_name "doas launching emerge resolves to emerge" 'emerge'
+  assert_activity "doas launching emerge resolves to emerge" 'emerge'
   assert_icon "doas emerge gets the Gentoo icon" "$ICON_GENTOO"
   stop_server
 }
@@ -622,7 +677,7 @@ test_manual_rename_keeps_updated_icon() {
   load_plugin
   start_child claude
   sync_now
-  assert_name "automatic name before the manual rename" 'claude'
+  assert_name "automatic name before the manual rename" 'plain'
   assert_icon "icon before the manual rename" "$ICON_CLAUDE"
   t rename-window -t w pinned
   sync_now
@@ -641,8 +696,9 @@ test_manual_rename_keeps_updated_icon() {
 }
 
 test_auto_restores_after_manual() {
-  start_server
-  gset @tmux-autoname-omit-session off
+  dir=$(named_dir plain)
+  mkdir -p "$dir/sub"
+  start_server "$dir"
   load_plugin
   win=$(win_id)
   sync_now "$win"
@@ -650,65 +706,62 @@ test_auto_restores_after_manual() {
   sync_now "$win"
   assert_name "manual rename survives sync before auto" 'mymanualname'
   run_bin auto -t "$win" >/dev/null
-  assert_name "auto forgets the manual rename and re-syncs" 'sh:w'
-  start_fake zsh
+  assert_name "auto forgets the manual rename and re-syncs" 'plain'
+  cd_pane "$dir/sub"
   sync_now "$win"
-  assert_name "after auto, sync renames the window again" 'zsh:w'
+  assert_name "after auto, sync renames the window again" 'sub'
   stop_server
 }
 
 test_empty_rename_restores_auto() {
   start_server
-  gset @tmux-autoname-omit-session off
   load_plugin
   sync_now
   t rename-window -t w mymanualname
   sync_now
   assert_name "manual rename survives sync before rename \"\"" 'mymanualname'
   t rename-window -t w ""
-  assert_name 'rename-window "" restores automatic naming' 'sh:w'
+  assert_name 'rename-window "" restores automatic naming' 'plain'
   stop_server
 }
 
 # --- Window and panes -------------------------------------------------------
 
 test_background_pane_does_not_hijack() {
-  start_server
-  gset @tmux-autoname-omit-session off
+  start_server "$(named_dir pa)"
   load_plugin
-  t split-window -t w
+  t split-window -t w -c "$(named_dir pb)"
   pane1=$(t list-panes -t w -F '#{pane_id}' | sed -n 1p)
   pane2=$(t list-panes -t w -F '#{pane_id}' | sed -n 2p)
   # pane2 is the newly split, active pane.
   start_fake claude "$pane1"
   start_fake zsh "$pane2"
   sync_now w
-  assert_name "window named from the active pane (zsh)" 'zsh:w'
+  assert_name "window named from the active pane" 'pb'
   # The background pane (claude) triggers a sync of its own: the window
   # must still reflect the active pane.
   sync_now "$pane1"
-  assert_name "a background pane's sync does not hijack the name" 'zsh:w'
+  assert_name "a background pane's sync does not hijack the name" 'pb'
   assert_icon "a background pane's sync does not hijack the icon" "$ICON_SHELL"
   stop_server
 }
 
 test_after_kill_pane_syncs_window() {
-  start_server
-  gset @tmux-autoname-omit-session off
+  start_server "$(named_dir pa)"
   load_plugin
   # Losing the active pane also fires these; only after-kill-pane may sync.
   t set-hook -gu 'window-pane-changed[120]'
   t set-hook -gu 'after-select-window[120]'
   t set-hook -gu 'window-linked[120]'
-  t split-window -t w
+  t split-window -t w -c "$(named_dir pb)"
   pane1=$(t list-panes -t w -F '#{pane_id}' | sed -n 1p)
   pane2=$(t list-panes -t w -F '#{pane_id}' | sed -n 2p)
   start_fake zsh "$pane1"
   start_fake nvim "$pane2"
   sync_now w
-  assert_name "window named from the active pane (nvim) before kill" 'nvim:w'
+  assert_name "window named from the active pane before kill" 'pb'
   t kill-pane -t "$pane2"
-  assert_name "after-kill-pane renames from the remaining active pane" 'zsh:w'
+  assert_name "after-kill-pane renames from the remaining active pane" 'pa'
   assert_icon "after-kill-pane updates the icon" "$ICON_SHELL"
   stop_server
 }
@@ -716,11 +769,11 @@ test_after_kill_pane_syncs_window() {
 test_break_pane_syncs_new_window() {
   start_server
   load_plugin
-  t split-window -t w
+  t split-window -t w -c "$(named_dir brk)"
   pane2=$(t list-panes -t w -F '#{pane_id}' | sed -n 2p)
   start_fake nvim "$pane2"
   t break-pane -d -s "$pane2" -t w:5
-  assert_name "a window made by break-pane is named" 'nvim' w:5
+  assert_name "a window made by break-pane is named" 'brk' w:5
   assert_icon "a window made by break-pane gets its icon" "$ICON_VIM" w:5
   stop_server
 }
@@ -753,12 +806,14 @@ test_tricky_names() {
   mkdir -p "$TRICKY_BASE/box"
   new_server box "$TRICKY_BASE/box"
   load_plugin
-  tricky_case 'C#' 1 'sh:C#'
-  tricky_case '##x' 2 'sh:##x'
-  tricky_case '#{session_name}' 3 'sh:#{session_name}'
-  tricky_case 'semi;' 4 'sh:semi;'
+  tricky_case 'C#' 1 'C#'
+  tricky_case '##x' 2 '##x'
+  tricky_case '#{session_name}' 3 '#{session_name}'
+  tricky_case 'semi;' 4 'semi;'
   tricky_case 'b\slash' 5 ''
-  tricky_case "$(printf 'a\ttab')" 6 'sh:atab'
+  tricky_case "$(printf 'a\ttab')" 6 'atab'
+  # tmux expands a leading ~ even inside double quotes.
+  tricky_case '~x' 7 '~x'
   stop_server
 }
 
@@ -781,11 +836,12 @@ wrapped_sync() {
 }
 
 test_rename_during_sync_is_kept() {
-  start_server
+  dir=$(named_dir plain)
+  mkdir -p "$dir/sub"
+  start_server "$dir"
   load_plugin
-  start_fake claude
   sync_now
-  gset @tmux-autoname-omit-session off
+  cd_pane "$dir/sub"
   # The user renames the window after sync read it, before sync writes.
   # shellcheck disable=SC2016
   wrapped_sync 'case " $* " in *" if-shell "*) $real rename-window -t w mine ;; esac'
@@ -796,19 +852,20 @@ test_rename_during_sync_is_kept() {
 }
 
 test_sync_retries_after_another_sync() {
-  start_server
+  dir=$(named_dir plain)
+  mkdir -p "$dir/sub"
+  start_server "$dir"
   load_plugin
-  start_fake claude
   sync_now
-  gset @tmux-autoname-omit-session off
+  cd_pane "$dir/sub"
   mark="$WORK/other-sync.mark"
   rm -f "$mark"
   # Once, just before the write, another sync stores an older name.
   wrapped_sync "case \" \$* \" in *' if-shell '*)
-  [ -e '$mark' ] || { : >'$mark'; \$real rename-window -t w sh:w \; \
-    set-option -wq -t w @tmux-autoname-applied sh:w; } ;; esac"
+  [ -e '$mark' ] || { : >'$mark'; \$real rename-window -t w older \; \
+    set-option -wq -t w @tmux-autoname-applied older; } ;; esac"
   assert_name "a sync that loses to another sync reads again and retries" \
-    'claude:w'
+    'sub'
   stop_server
 }
 
@@ -841,7 +898,7 @@ test_no_utf8_locale() {
   init_repo "$base/项目"
   start_server "$base/项目"
   run_direct "$BIN" sync -t w
-  assert_name "sync works without a UTF-8 locale, non-ASCII kept" 'sh:项目'
+  assert_name "sync works without a UTF-8 locale, non-ASCII kept" '项目'
   assert_icon "the icon is set without a UTF-8 locale" "$ICON_SHELL"
   stop_server
 }
@@ -914,19 +971,19 @@ SCRIPT
 # --- Loader -----------------------------------------------------------------
 
 test_loader_syncs_all_windows() {
-  start_server
-  gset @tmux-autoname-omit-session off
-  t new-window -t w:
-  t new-window -t w:
-  t new-session -d -s other -c "$(fixture)"
+  dir=$(named_dir plain)
+  start_server "$dir"
+  t new-window -t w: -c "$dir"
+  t new-window -t w: -c "$dir"
+  t new-session -d -s other -c "$(named_dir elsewhere)"
   load_plugin
   for target in w:0 w:1 w:2 other:0; do
     assert_icon "loader sets the icon on $target" "$ICON_SHELL" "$target"
   done
-  assert_name "loader names w:0" 'sh:w' w:0
-  assert_name "loader names w:1" 'sh:w' w:1
-  assert_name "loader names w:2" 'sh:w' w:2
-  assert_name "loader names a window of another session" 'sh:other' other:0
+  assert_name "loader names w:0" 'plain' w:0
+  assert_name "loader names w:1" 'plain' w:1
+  assert_name "loader names w:2" 'plain' w:2
+  assert_name "loader names a window of another session" 'elsewhere' other:0
   stop_server
 }
 
@@ -940,7 +997,6 @@ hook_has() {
 
 test_hooks_registered() {
   start_server
-  gset @tmux-autoname-omit-session off
   load_plugin
   for hook in after-new-window after-select-window window-pane-changed \
     after-split-window client-attached session-created after-kill-pane \
@@ -951,11 +1007,11 @@ test_hooks_registered() {
     hook_has after-rename-window '#{==:#{window_name},}'
   check "sync hooks target the window by id" \
     hook_has after-kill-pane "sync -t '#{window_id}'"
-  t new-window -t w:
-  assert_name "after-new-window names the new window" 'sh:w' w:1
+  t new-window -t w: -c "$(named_dir fresh)"
+  assert_name "after-new-window names the new window" 'fresh' w:1
   assert_icon "after-new-window sets the new window's icon" "$ICON_SHELL" w:1
-  t new-session -d -s second -c "$(fixture)"
-  assert_name "session-created names the new session's first window" 'sh:second' second:0
+  t new-session -d -s second -c "$(named_dir second)"
+  assert_name "session-created names the new session's first window" 'second' second:0
   stop_server
 }
 
@@ -966,13 +1022,12 @@ test_loader_quoted_path() {
   cp "$PLUGIN" "$dir/"
   cp "$BIN" "$dir/bin/"
   start_server
-  gset @tmux-autoname-omit-session off
   run_direct "$dir/tmux-autoname.tmux"
-  t new-window -t w:
-  assert_name "hooks run from a checkout path with quotes, \$ and #" 'sh:w' w:1
+  t new-window -t w: -c "$(named_dir fresh)"
+  assert_name "hooks run from a checkout path with quotes, \$ and #" 'fresh' w:1
   t rename-window -t w:1 manual
   t rename-window -t w:1 ""
-  assert_name "the rename hook runs from a checkout path with quotes" 'sh:w' w:1
+  assert_name "the rename hook runs from a checkout path with quotes" 'fresh' w:1
   stop_server
 }
 
@@ -983,7 +1038,6 @@ env_is_bin() {
 
 test_loader_exports_bin() {
   start_server
-  gset @tmux-autoname-omit-session off
   stale_bin="$FAKE_DIR/stale-tmux-autoname"
   cat >"$stale_bin" <<'SCRIPT'
 #!/bin/sh
@@ -995,8 +1049,8 @@ SCRIPT
   load_plugin
   check "TMUX_AUTONAME_BIN in the global environment is this checkout's bin" \
     env_is_bin
-  t new-window -t w:
-  assert_name "a leftover @tmux-autoname-bin is ignored" 'sh:w' w:1
+  t new-window -t w: -c "$(named_dir fresh)"
+  assert_name "a leftover @tmux-autoname-bin is ignored" 'fresh' w:1
   stop_server
 }
 
@@ -1041,31 +1095,33 @@ test_status_output() {
   win=$(win_id)
   sync_now "$win"
   out=$(bin_out status -t "$win")
-  check "status: name line" has_line "$out" 'name: claude'
-  check "status: applied line" has_line "$out" 'applied: claude'
+  check "status: name line" has_line "$out" 'name: plain'
+  check "status: applied line" has_line "$out" 'applied: plain'
   check "status: manual line, automatic window" has_line "$out" 'manual: no'
   check "status: activity line" has_line "$out" 'activity: claude'
   check "status: icon line" has_line "$out" "icon: $ICON_CLAUDE"
+  check "status: project line" has_line "$out" 'project: w'
+  check "status: task line" has_line "$out" 'task: '
   t rename-window -t w pinned
   out=$(bin_out status -t "$win")
   check "status: name line after a manual rename" has_line "$out" 'name: pinned'
-  check "status: applied line keeps the automatic name" has_line "$out" 'applied: claude'
+  check "status: applied line keeps the automatic name" has_line "$out" 'applied: plain'
   check "status: manual line, manual window" has_line "$out" 'manual: yes'
   check "status: activity line on a manual window" has_line "$out" 'activity: claude'
   stop_server
 }
 
 run_all() {
-  test_name_activity_only
-  test_name_omit_session_off
-  test_name_session_container_area
-  test_name_session_container_root
-  test_name_session_name_workspace
+  test_name_directory_fallback
+  test_name_home_directory
   if command -v git >/dev/null 2>&1; then
-    test_name_session_container_beats_git
-    test_name_git_workspace
-    test_name_git_linked_worktree
-    test_area_depth
+    test_name_session_container
+    test_name_task_branch
+    test_name_branch_edge_cases
+    test_name_old_git
+    test_name_git_project
+    test_name_linked_worktree
+    test_name_submodule
     test_ssh_host_from_argv
   fi
   test_ssh_host_from_title

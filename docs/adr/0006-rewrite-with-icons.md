@@ -1,6 +1,7 @@
 # Rewrite: per-window Icon, `:` separator, no migration
 
-Status: Accepted. Date: 2026-10-17. Supersedes
+Status: Superseded by [ADR 0007](./0007-project-and-task-names.md) where
+they conflict. Date: 2026-10-17. Supersedes
 [ADR 0005](./0005-restore-deterministic-naming.md) where they conflict.
 
 ## Context

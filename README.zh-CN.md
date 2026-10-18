@@ -4,36 +4,37 @@
 
 [![CI](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml/badge.svg)](https://github.com/jczhang02/tmux-autoname/actions/workflows/ci.yml)
 
-tmux-autoname 根据窗口里在运行什么, 在什么位置, 确定性地给 tmux 窗口命名, 并按这个程序给每个窗口一个图标. 不调用模型, 不采集屏幕文字, 不需要 API key, 没有 daemon.
+tmux-autoname 根据窗口所做的项目和任务, 确定性地给 tmux 窗口命名, 并按窗口里运行的程序给每个窗口一个图标. 不调用模型, 不采集屏幕文字, 不需要 API key, 没有 daemon.
 
 ```text
-claude:tmux-autoname                      Workspace 与会话名不同
-zsh:partjobs/patent-value-identification  omit-session 关闭
-claude:paxc-approx-dnn                    会话 partjobs, 面板在 ~/dev/partjobs/paxc-approx-dnn
-claude                                    会话 gig, 面板在会话根目录
-ssh:gentoo-box                            远程主机作为 Workspace
+patent-value-identification                           会话 partjobs, 在 main 上
+patent-value-identification/ch4-selector-improvement  会话 partjobs, 在分支 ch4-selector-improvement 上
+paxc-approx-dnn/report-clarity                        会话 partjobs, worktree report-clarity
+ch4-selector-improvement                              会话 patent-value-identification
+main                                                  会话 tmux-autoname, 在 main 上
+gentoo-box                                            ssh gentoo-box
 ```
 
-名字由 Activity `A`, Workspace `W` 和 Area `R` 组成:
+名字由 Project `P` 和 Task `T` 组成. Task 是当前分支, `main` 和 `master` 除外:
 
-| Workspace | Area | 名字 |
+| P 与会话名不同 | Task | 名字 |
 |---|---|---|
-| 有 | 有 | `A:W/R` |
-| 有 | 空 | `A:W` |
-| 空 | 有 | `A:R` |
-| 空 | 空 | `A` |
+| 是 | 有 | `P/T` |
+| 是 | 无 | `P` |
+| 否 | 有 | `T` |
+| 否 | 无 | 分支名, 否则为目录名 |
 
-Workspace 与会话名相同时为空 (见 `@tmux-autoname-omit-session`). 设计记录在 [docs/adr/0006-rewrite-with-icons.md](docs/adr/0006-rewrite-with-icons.md); 术语定义在 [CONTEXT.md](CONTEXT.md).
+程序不放进名字, 由图标显示. 设计记录在 [docs/adr/0007-project-and-task-names.md](docs/adr/0007-project-and-task-names.md); 术语定义在 [CONTEXT.md](CONTEXT.md).
 
 ## 为什么有这个插件
 
-早期版本用 LLM 从屏幕文字推断任务, 后来改为镜像编码 Agent 自己设置的标题. 两者都被放弃了: 推断出的任务描述的是当前步骤, 不是目标; Agent 标题会随面板焦点变化, 并且让同一会话里的窗口看起来一样. 本插件改用一条本地的确定性规则.
+早期版本用 LLM 从屏幕文字推断任务, 后来改为镜像编码 Agent 自己设置的标题. 两者都被放弃了: 推断出的任务描述的是当前步骤, 不是目标; Agent 标题会随面板焦点变化, 并且让同一会话里的窗口看起来一样. 本插件改用一条本地的确定性规则. 一个窗口通常只在一个项目里做一个任务, 而任务通常有自己的分支, 所以名字只说明这两点.
 
 ## 依赖
 
 - tmux 3.3 及以上 (CI 测试 3.3a, 3.4 和 3.5a)
 - POSIX `sh` (Linux 和 macOS 默认自带)
-- `git`, 可选, 用于 Git Workspace 规则
+- `git` 2.31 及以上, 可选, 用于 Project 和 Task; 更旧的 Git 按没有 Git 处理
 - `zsh`, 可选, 用于推荐的 `integrations/tmux-autoname.zsh`
 - [Nerd Font](https://www.nerdfonts.com/), 可选, 用于显示图标
 
@@ -98,18 +99,19 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 
 所有部分都取自窗口的**活动**面板.
 
-- **Activity** 是 `pane_current_command`: 取 basename, 转小写, 去掉 `-coding-agent` 后缀 (`pi-coding-agent` 变成 `pi`), 只保留 `[a-z0-9._+-]`; 结果为空时为 `shell`. 启动器 (`sudo`, `doas`, `env`, `nice`, `timeout`, `systemd-run` 等) 或解释器 (`node`, `bun`, `deno`, `python*`, `ruby`, `perl`) 会通过前台进程的 argv 解析成它运行的程序: `doas emerge -a` 是 `emerge`, `node .../bin/codex` 是 `codex`, `python3 -m http.server` 是 `http.server`. 没有脚本的解释器 (REPL, `-e`, `-c`) 保留自己的名字. `mosh-client` 是 `mosh`.
-- **Workspace** 取第一条适用的规则:
-  1. **远程主机.** 对 `ssh` 和 `mosh`, 取远程主机名, 转小写. 它从前台进程的 argv 读取: 跳过选项 (及其值), 取第一个位置参数, 去掉 `user@` 前缀, `ssh://` scheme 和 `:port`. 对 `mosh-client`, 或 argv 给不出结果时, 从面板标题解析主机名. 没有 Area. 没有 `/proc` 时 (macOS), argv 来自 `ps`, 它用空格连接参数, 所以含空格的参数 (`-o 'Opt value'`) 可能让主机名错位.
-  2. **会话容器.** 如果 `#{session_path}` 的 basename 等于会话名, 且面板路径就是该目录或在其下: 取会话名, 以 `#{session_path}` 为根目录.
-  3. **Git 仓库.** 取 `git rev-parse --show-toplevel` 的 basename, 以 toplevel 为根目录. 在 linked worktree 中, 这是 worktree 目录的名字.
-  4. **会话名.** 取会话名, 没有根目录.
-- **Area** 是面板路径相对于 Workspace 根目录的部分, 仅当面板严格位于根目录之下时出现. 它保留前 `@tmux-autoname-area-depth` 段路径 (默认 `1`; `0` 保留完整相对路径). 没有根目录时就没有 Area.
-- **省略会话名.** 当 `@tmux-autoname-omit-session on` (默认) 时, 与会话名相同的 Workspace 会被省略: `claude` 而不是 `claude:partjobs`, `zsh:patent-value-identification` 而不是 `zsh:partjobs/patent-value-identification`. 因此单看 `A:x` 无法判断 `x` 是 Workspace 还是 Area.
+- **Project** 取第一条适用的规则:
+  1. **远程主机.** 对 `ssh` 和 `mosh`, 取远程主机名, 转小写. 名字只有主机名. 它从前台进程的 argv 读取: 跳过选项 (及其值), 取第一个位置参数, 去掉 `user@` 前缀, `ssh://` scheme 和 `:port`. 对 `mosh-client`, 或 argv 给不出结果时, 从面板标题解析主机名. 没有 `/proc` 时 (macOS), argv 来自 `ps`, 它用空格连接参数, 所以含空格的参数 (`-o 'Opt value'`) 可能让主机名错位.
+  2. **Git 仓库.** 取 `git rev-parse --show-toplevel` 的 basename. linked worktree 取它的主仓库名: `paxc-approx-dnn/.claude/worktrees/report-clarity` 里的 worktree, Project 是 `paxc-approx-dnn`. submodule 保留自己的名字.
+  3. **会话容器.** 不在 Git 里时, 如果 `#{session_path}` 的 basename 等于会话名, 且面板路径在该目录之下: 取它下面的第一级目录.
+  4. **会话名.**
+- **Task** 是当前分支, 但 `main`, `master` 和 detached HEAD 除外. 开头的 `worktree-` (Claude Code 给 worktree 分支加的前缀) 会被去掉.
+- 与会话名相同的 Project 会被省略. Project 和 Task 都没有时, 名字是当前分支 (`main`); 不在 Git 里时, 是目录名 (家目录为 `~`).
+- 子目录不放进名字. 同一个项目, 同一个分支上的两个窗口名字相同; 请手动给其中一个命名 (`prefix` + <kbd>,</kbd>).
+- **Activity** 是正在运行的程序, 用于选择图标, 并由 `status` 打印: 取 `pane_current_command` 的 basename, 转小写, 去掉 `-coding-agent` 后缀 (`pi-coding-agent` 变成 `pi`), 只保留 `[a-z0-9._+-]`; 结果为空时为 `shell`. 启动器 (`sudo`, `doas`, `env`, `nice`, `timeout`, `systemd-run` 等) 或解释器 (`node`, `bun`, `deno`, `python*`, `ruby`, `perl`) 会通过前台进程的 argv 解析成它运行的程序: `doas emerge -a` 是 `emerge`, `node .../bin/codex` 是 `codex`, `python3 -m http.server` 是 `http.server`. 没有脚本的解释器 (REPL, `-e`, `-c`) 保留自己的名字. `mosh-client` 是 `mosh`.
 
 ## 图标
 
-每次 `sync` 都会按 Activity 设置 `@tmux-autoname-icon`, 有 Manual Name 的窗口也一样: Manual Name 只改变名字, 图标仍然显示窗口里在运行什么. 内置表覆盖了很多程序.
+每次 `sync` 都会按 Activity 设置 `@tmux-autoname-icon`, 有 Manual Name 的窗口也一样: Manual Name 只改变名字, 图标仍然显示窗口里在运行什么. 图标是唯一显示程序的地方, 所以内置表覆盖了很多程序.
 
 图标用 sh `case` glob 与解析后的 Activity 匹配. 按以下顺序, 第一个匹配生效:
 
@@ -172,7 +174,7 @@ tmux-autoname help
 
 - `sync` 设置某个面板或窗口所属窗口的名字和图标, 依据的是该窗口的**活动**面板, 而不是你传入的面板. 钩子和 zsh 集成会调用它; 你很少需要手动执行.
 - `auto` 忘记 Manual Name, 并立即同步.
-- `status` 打印 `name:`, `applied:` (`sync` 最近一次设置的名字), `manual:`, `activity:` 和 `icon:` 几行.
+- `status` 打印 `name:`, `applied:` (`sync` 最近一次设置的名字), `manual:`, `activity:`, `icon:`, `project:` 和 `task:` 几行.
 
 Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一直保留, 直到你运行 `tmux-autoname auto`, 或把窗口名改成空字符串 (`tmux rename-window ""`).
 
@@ -180,8 +182,6 @@ Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一
 
 | 选项 | 默认值 | 含义 |
 |---|---|---|
-| `@tmux-autoname-area-depth` | `1` | 保留的 Area 路径段数; `0` 保留完整相对路径 |
-| `@tmux-autoname-omit-session` | `on` | 省略与会话名相同的 Workspace; `off` 保留它 |
 | `@tmux-autoname-icons` | 空 | 你的 `pattern=icon` 对, 在内置表之前检查 |
 | `@tmux-autoname-icon-default` | U+F018D (󰆍) | 没有模式匹配时的图标 |
 | `@tmux-autoname-key-auto` | 未设置 | `prefix` 键表中对当前窗口执行 `auto` 的按键 |
@@ -189,7 +189,6 @@ Manual Name (tmux 自带的 `prefix` + <kbd>,</kbd>, 或 `rename-window`) 会一
 在插件加载之前设置:
 
 ```tmux
-set -g @tmux-autoname-area-depth 0
 set -g @tmux-autoname-key-auto 'M-a'
 ```
 
@@ -202,12 +201,22 @@ set -g @tmux-autoname-key-auto 'M-a'
 
 两个条目都不需要插件的路径. tmux-palette 只从 `~/.config/tmux-palette/commands.json` 读取用户条目, 所以请把这两个条目复制到这个数组中; 插件不会修改它.
 
+## 升级到 2.0
+
+2.0 改变了名字所表达的内容 (见 [ADR 0007](docs/adr/0007-project-and-task-names.md)).
+
+- 名字不再以程序开头: `claude:paxc-approx-dnn` 现在是 `paxc-approx-dnn`. 程序由图标显示.
+- `main` 和 `master` 以外的分支是 Task: `patent-value-identification/ch4-selector-improvement`.
+- 子目录不再放进名字.
+- `@tmux-autoname-area-depth` 和 `@tmux-autoname-omit-session` 已移除. 请从配置中删除它们.
+- 如果你的状态栏格式显示 `#W`, 可以用 `#{=/24/…:window_name}` 截断过长的 `P/T` 名字.
+
 ## 升级到 1.0
 
 1.0 是一次重写, 不迁移旧安装.
 
 - Activity 后的分隔符现在总是 `:`. 1.0 之前的版本在 omit-session 开启时给出 `zsh/src`; 1.0 给出 `zsh:src`.
-- `@tmux-autoname-omit-session` 默认为 `on`. 设为 `off` 可以在每个名字中保留 Workspace, 与 0.7 的行为相同.
+- `@tmux-autoname-omit-session` 默认为 `on`. 设为 `off` 可以在每个名字中保留 Workspace, 与 0.7 的行为相同. (2.0 已移除.)
 - `@tmux-autoname-bin` 已移除. 请从配置中删除它.
 - 把 `#{@tmux-autoname-icon}` 加入你的格式 (见[显示图标](#显示图标)). 如果你的格式中有按窗口名选择图标的 `#{m:...,#W}` 表, 请删除它.
 - 加载时会覆盖索引 `[120]` 上的旧钩子. 旧版本的选项和逐窗口状态会保留到 tmux server 重启; 如果想要干净的状态, 运行一次 `tmux kill-server`.
@@ -217,7 +226,8 @@ set -g @tmux-autoname-key-auto 'M-a'
 ## 局限
 
 - 没有 zsh 集成时, 名字和图标只在 tmux 自身的窗口, 面板和会话事件上更新, 不会因为同一面板中的新前台命令或 `cd` 而更新.
-- Workspace 只使用 `git`; 其他版本控制系统会退回到会话容器规则或会话名.
+- Project 和 Task 只使用 `git`; 其他版本控制系统会退回到会话容器规则或会话名.
+- 程序在运行期间切换分支或进入 worktree 时 (比如编码 Agent), 名字要到下一次 tmux 事件 (切换窗口或面板) 或程序退出时才会更新. 程序运行期间没有钩子会触发.
 - 远程主机是传给 `ssh` 的名字 (例如 `~/.ssh/config` 中的 `Host` 别名), 而不是解析后的 `HostName`.
 
 ## 开发与验证

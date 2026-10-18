@@ -1,13 +1,36 @@
 # Changelog
 
-## Unreleased
+## 2.0.0
+
+Names say the project and the task, not the program. See
+[docs/adr/0007-project-and-task-names.md](docs/adr/0007-project-and-task-names.md).
+
+**Breaking changes:**
+
+- The name is `P/T`, `P` or `T`, from the Project `P` and the Task `T`.
+  The Project is the remote host, the main Git repository, the directory
+  below a session container, or the session name; a Project equal to the
+  session name is left out. The Task is the current branch other than
+  `main` or `master`, without a leading `worktree-`. With neither, the
+  name is the branch, else the directory name (`~` for the home
+  directory). `claude:paxc-approx-dnn` is now `paxc-approx-dnn`, and
+  on a task branch
+  `patent-value-identification/ch4-selector-improvement`.
+- The program is no longer part of the name; the icon shows it.
+- Subdirectories are no longer part of the name.
+- `@tmux-autoname-area-depth` and `@tmux-autoname-omit-session` are
+  removed.
 
 **New:**
 
+- A linked worktree, such as one Claude Code makes under
+  `.claude/worktrees/`, is named after its main repository and its
+  branch. In 1.0 a session container hid it.
 - The built-in icon table covers many more programs: Gentoo tools, package
   managers, Node, Rust, Go, containers, build tools, network tools,
   databases, `gh`, `systemctl`, `tmux`, LaTeX and Typst, `zathura`,
   Markdown tools, media tools, Emacs and other editors, and more agents.
+- `status` also prints `project:` and `task:`.
 
 **Changed:**
 
