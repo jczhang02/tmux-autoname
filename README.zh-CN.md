@@ -173,6 +173,15 @@ set -g @tmux-autoname-area-depth 0
 set -g @tmux-autoname-key-auto 'M-a'
 ```
 
+## 可选: tmux-palette
+
+如果使用 [tmux-palette](https://github.com/eduwass/tmux-palette), `integrations/tmux-palette.json` 中有两个 `Windows` 分类的条目:
+
+- **Restore Automatic Window Name** 运行 `rename-window ''`, 插件的钩子把它变成 `tmux-autoname auto`.
+- **Show Window Name Status** 用普通的 `display-message` 显示名字, applied 名字, 名字是否为手动, 以及图标.
+
+两个条目都不需要插件的路径. tmux-palette 只从 `~/.config/tmux-palette/commands.json` 读取用户条目, 所以请把这两个条目复制到这个数组中; 插件不会修改它.
+
 ## 升级到 1.0
 
 1.0 是一次重写, 不迁移旧安装.

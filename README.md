@@ -235,6 +235,20 @@ set -g @tmux-autoname-area-depth 0
 set -g @tmux-autoname-key-auto 'M-a'
 ```
 
+## Optional: tmux-palette
+
+For [tmux-palette](https://github.com/eduwass/tmux-palette),
+`integrations/tmux-palette.json` has two items for the `Windows` category:
+
+- **Restore Automatic Window Name** runs `rename-window ''`, which the
+  plugin's hook turns into `tmux-autoname auto`.
+- **Show Window Name Status** shows the name, the applied name, whether the
+  name is manual, and the icon, with a plain `display-message`.
+
+Neither needs the plugin's path. tmux-palette reads user items only from
+`~/.config/tmux-palette/commands.json`, so copy the two items into that
+array; the plugin does not edit it.
+
 ## Upgrading to 1.0
 
 1.0 is a rewrite and does not migrate older installs.

@@ -39,6 +39,8 @@ A from-scratch rewrite with per-window icons. See
   `ruby`, `perl`) to the program they run, from the foreground process's
   argv: `node .../bin/codex` is now `codex`, `doas emerge` is `emerge`.
 - A `window-linked[120]` hook syncs a window made by `break-pane`.
+- `integrations/tmux-palette.json`: tmux-palette items to restore
+  automatic naming and to show the name status.
 
 **Fixes:**
 
