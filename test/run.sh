@@ -57,10 +57,17 @@ cd "$WORK"
 SERVERS=""
 SOCK=""
 
+kill_server() {
+  # $1 = socket name. tmux 3.8 leaves the socket file behind on
+  # kill-server, so remove it too.
+  tmux -L "$1" kill-server >/dev/null 2>&1 || true
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1"
+}
+
 # shellcheck disable=SC2317,SC2329  # invoked indirectly via trap
 cleanup() {
   for s in $SERVERS; do
-    tmux -L "$s" kill-server >/dev/null 2>&1 || true
+    kill_server "$s"
   done
   rm -rf "$WORK"
 }
@@ -106,7 +113,7 @@ start_server() {
 }
 
 stop_server() {
-  tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
+  kill_server "$SOCK"
 }
 
 fixture() {
