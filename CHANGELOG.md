@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**New:**
+
+- The built-in icon table covers many more programs: Gentoo tools, package
+  managers, Node, Rust, Go, containers, build tools, network tools,
+  databases, `gh`, `systemctl`, `tmux`, LaTeX and Typst, `zathura`,
+  Markdown tools, media tools, Emacs and other editors, and more agents.
+
 **Changed:**
 
 - `claude*` gets the codicons `claude` glyph U+EC82 instead of U+273B

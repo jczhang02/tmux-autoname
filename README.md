@@ -164,7 +164,8 @@ All parts come from the window's ACTIVE pane.
 
 Every `sync` sets `@tmux-autoname-icon` from the Activity, also on a
 window with a Manual Name: a Manual Name changes only the name, and the
-icon still shows what runs in the window.
+icon still shows what runs in the window. The built-in table covers
+many programs.
 
 The icon is matched against the resolved Activity with sh `case` globs.
 The first match wins, in this order:
@@ -181,24 +182,45 @@ icon too.
 | `nvim*` `vim*` `vi` | U+E62B |  | vim |
 | `claude*` | U+EC82 |  | Claude Code |
 | `codex*` | U+EC81 |  | Codex (OpenAI) |
-| `opencode*` `pi` | U+F06A9 | 󰚩 | other agents |
-| `ssh*` `mosh*` | U+F08C0 | 󰣀 | remote |
-| `btop*` `htop*` `top` | U+F035B | 󰍛 | system monitor |
-| `python*` `ipython*` | U+E606 |  | python |
+| `opencode*` `pi` `gemini*` `aider*` `crush*` `goose*` `amp` | U+F06A9 | 󰚩 | other agents |
+| `ssh*` `mosh*` `scp` `sftp` `rsync` | U+F08C0 | 󰣀 | remote |
+| `btop*` `htop*` `top` `nvtop` `nvidia-smi` `watch` | U+F035B | 󰍛 | system monitor |
+| `python*` `ipython*` `uv` `pip*` `pdm` `conda` `mamba` `jupyter*` | U+E606 |  | python |
 | `git*` `lazygit*` `tig` | U+F02A2 | 󰊢 | git |
+| `gh` | U+F02A4 | 󰊤 | GitHub |
 | `yazi*` `lf` `ranger*` | U+F024B | 󰉋 | file manager |
-| `man` `less` `bat` | U+F0219 | 󰈙 | pager |
+| `man` `less` `bat` `more` `tail` `journalctl` `dmesg` | U+F0219 | 󰈙 | pager and logs |
+| `emerge` `eix*` `equery` `eselect` `euse` `emaint` | U+F30D |  | Gentoo |
+| `flatpak` `mise` `pacman` `paru` `yay` `apt*` `dnf` `brew` | U+F03D7 | 󰏗 | package manager |
+| `node*` `npm*` `npx*` `pnpm*` `bun*` `deno` `yarn*` | U+F0399 | 󰎙 | Node and JS |
+| `cargo` `rustc` | U+F1617 | 󱘗 | Rust |
+| `go` | U+F07D3 | 󰟓 | Go |
+| `docker*` `podman*` `lxc` `incus` | U+F0868 | 󰡨 | container |
+| `kubectl` `k9s` | U+F10FE | 󱃾 | Kubernetes |
+| `make` `cmake` `ninja` `meson` `just` `gcc` `clang` `cc` | U+F08EA | 󰣪 | build |
+| `curl` `wget` `aria2c` `ping` `mtr` `dig` `nslookup` `cloudflared` | U+F059F | 󰖟 | network |
+| `sqlite3` `psql` `mysql` `redis-cli` `duckdb` | U+F01BC | 󰆼 | database |
+| `systemctl` | U+F0493 | 󰒓 | system service |
+| `tmux` `sesh` | U+EBC8 |  | tmux |
+| `latexmk` `tectonic` `xelatex` `pdflatex` `lualatex` `typst` | U+E81F |  | LaTeX and Typst |
+| `zathura` | U+F0226 | 󰈦 | PDF |
+| `typora` `pandoc` | U+E73E |  | Markdown |
+| `ffmpeg` `yt-dlp` `mpv` | U+F0381 | 󰎁 | audio and video |
+| `emacs*` | U+E632 |  | Emacs |
+| `nano` `micro` `hx` `helix` | U+F0DC8 | 󰷈 | other editors |
 | `zsh*` `bash*` `fish*` `dash*` `sh` `shell` | U+F489 |  | shell |
 
 All glyphs need a Nerd Font. U+EC82 and U+EC81 are the codicons
-`claude` and `openai` glyphs, which older Nerd Font releases lack.
+`claude` and `openai` glyphs, which older Nerd Font releases lack. A
+program that no pattern matches gets the default icon; `tmux-autoname
+status` prints its Activity, which you can add to `@tmux-autoname-icons`.
 
 `@tmux-autoname-icons` holds whitespace-separated `pattern=icon` pairs,
 each split at the first `=`. An icon cannot contain whitespace. Your
 entries come before the built-in table, so they can also override it:
 
 ```tmux
-set -g @tmux-autoname-icons 'emerge=󰏗 python*=X'
+set -g @tmux-autoname-icons 'frob*=󰏗 python*=X'
 set -g @tmux-autoname-icon-default '·'
 ```
 

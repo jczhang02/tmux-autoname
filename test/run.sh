@@ -36,6 +36,15 @@ ICON_PAGER=$(printf '\363\260\210\231')   # U+F0219
 ICON_SHELL=$(printf '\357\222\211')       # U+F489
 ICON_DEFAULT=$(printf '\363\260\206\215') # U+F018D
 
+ICON_GENTOO=$(printf '\357\214\215')        # U+F30D
+ICON_NODE=$(printf '\363\260\216\231')      # U+F0399
+ICON_CONTAINER=$(printf '\363\260\241\250') # U+F0868
+ICON_TEX=$(printf '\356\240\237')           # U+E81F
+ICON_BUILD=$(printf '\363\260\243\252')     # U+F08EA
+ICON_NETWORK=$(printf '\363\260\226\237')   # U+F059F
+ICON_GITHUB=$(printf '\363\260\212\244')    # U+F02A4
+ICON_TMUX=$(printf '\356\257\210')          # U+EBC8
+
 PASS=0
 FAIL=0
 FAIL_LIST=""
@@ -517,7 +526,7 @@ test_launcher_resolves_to_command() {
   wait_cmd doas
   sync_now
   assert_name "doas launching emerge resolves to emerge" 'emerge'
-  assert_icon "an unknown program gets the default icon" "$ICON_DEFAULT"
+  assert_icon "doas emerge gets the Gentoo icon" "$ICON_GENTOO"
   stop_server
 }
 
@@ -550,6 +559,15 @@ test_builtin_icons() {
   icon_case frobnicate "$ICON_DEFAULT" 11
   # "top" is an exact pattern, not top*.
   icon_case topgrade "$ICON_DEFAULT" 12
+  icon_case emerge "$ICON_GENTOO" 13
+  # npm's argv names npm-cli.js, which resolves to npm-cli.
+  icon_case npm-cli "$ICON_NODE" 14
+  icon_case podman "$ICON_CONTAINER" 15
+  icon_case latexmk "$ICON_TEX" 16
+  icon_case make "$ICON_BUILD" 17
+  icon_case curl "$ICON_NETWORK" 18
+  icon_case gh "$ICON_GITHUB" 19
+  icon_case sesh "$ICON_TMUX" 20
   if t display-message -p -t w:1 '#{window_name}' | grep -q "$ICON_CLAUDE"; then
     fail "the icon is not put into the window name"
   else
@@ -560,7 +578,7 @@ test_builtin_icons() {
 
 test_user_icons() {
   start_server
-  gset @tmux-autoname-icons 'cla*=C zs*=Z emerge=E foo=a=b'
+  gset @tmux-autoname-icons 'cla*=C zs*=Z frob=E foo=a=b'
   load_plugin
   start_fake claude w:0
   sync_now w:0
@@ -570,7 +588,7 @@ test_user_icons() {
   sync_now w:1
   assert_icon "a user pattern is a glob" 'Z' w:1
   t new-window -t w:
-  start_fake emerge w:2
+  start_fake frob w:2
   sync_now w:2
   assert_icon "a user icon for a program with no built-in icon" 'E' w:2
   t new-window -t w:

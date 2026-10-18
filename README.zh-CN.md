@@ -109,7 +109,7 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 
 ## 图标
 
-每次 `sync` 都会按 Activity 设置 `@tmux-autoname-icon`, 有 Manual Name 的窗口也一样: Manual Name 只改变名字, 图标仍然显示窗口里在运行什么.
+每次 `sync` 都会按 Activity 设置 `@tmux-autoname-icon`, 有 Manual Name 的窗口也一样: Manual Name 只改变名字, 图标仍然显示窗口里在运行什么. 内置表覆盖了很多程序.
 
 图标用 sh `case` glob 与解析后的 Activity 匹配. 按以下顺序, 第一个匹配生效:
 
@@ -124,21 +124,40 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 | `nvim*` `vim*` `vi` | U+E62B |  | vim |
 | `claude*` | U+EC82 |  | Claude Code |
 | `codex*` | U+EC81 |  | Codex (OpenAI) |
-| `opencode*` `pi` | U+F06A9 | 󰚩 | 其他 Agent |
-| `ssh*` `mosh*` | U+F08C0 | 󰣀 | 远程 |
-| `btop*` `htop*` `top` | U+F035B | 󰍛 | 系统监视器 |
-| `python*` `ipython*` | U+E606 |  | python |
+| `opencode*` `pi` `gemini*` `aider*` `crush*` `goose*` `amp` | U+F06A9 | 󰚩 | 其他 Agent |
+| `ssh*` `mosh*` `scp` `sftp` `rsync` | U+F08C0 | 󰣀 | 远程 |
+| `btop*` `htop*` `top` `nvtop` `nvidia-smi` `watch` | U+F035B | 󰍛 | 系统监视器 |
+| `python*` `ipython*` `uv` `pip*` `pdm` `conda` `mamba` `jupyter*` | U+E606 |  | python |
 | `git*` `lazygit*` `tig` | U+F02A2 | 󰊢 | git |
+| `gh` | U+F02A4 | 󰊤 | GitHub |
 | `yazi*` `lf` `ranger*` | U+F024B | 󰉋 | 文件管理器 |
-| `man` `less` `bat` | U+F0219 | 󰈙 | 分页器 |
+| `man` `less` `bat` `more` `tail` `journalctl` `dmesg` | U+F0219 | 󰈙 | 分页器和日志 |
+| `emerge` `eix*` `equery` `eselect` `euse` `emaint` | U+F30D |  | Gentoo |
+| `flatpak` `mise` `pacman` `paru` `yay` `apt*` `dnf` `brew` | U+F03D7 | 󰏗 | 包管理器 |
+| `node*` `npm*` `npx*` `pnpm*` `bun*` `deno` `yarn*` | U+F0399 | 󰎙 | Node 和 JS |
+| `cargo` `rustc` | U+F1617 | 󱘗 | Rust |
+| `go` | U+F07D3 | 󰟓 | Go |
+| `docker*` `podman*` `lxc` `incus` | U+F0868 | 󰡨 | 容器 |
+| `kubectl` `k9s` | U+F10FE | 󱃾 | Kubernetes |
+| `make` `cmake` `ninja` `meson` `just` `gcc` `clang` `cc` | U+F08EA | 󰣪 | 编译构建 |
+| `curl` `wget` `aria2c` `ping` `mtr` `dig` `nslookup` `cloudflared` | U+F059F | 󰖟 | 网络 |
+| `sqlite3` `psql` `mysql` `redis-cli` `duckdb` | U+F01BC | 󰆼 | 数据库 |
+| `systemctl` | U+F0493 | 󰒓 | 系统服务 |
+| `tmux` `sesh` | U+EBC8 |  | tmux |
+| `latexmk` `tectonic` `xelatex` `pdflatex` `lualatex` `typst` | U+E81F |  | LaTeX 和 Typst |
+| `zathura` | U+F0226 | 󰈦 | PDF |
+| `typora` `pandoc` | U+E73E |  | Markdown |
+| `ffmpeg` `yt-dlp` `mpv` | U+F0381 | 󰎁 | 音视频 |
+| `emacs*` | U+E632 |  | Emacs |
+| `nano` `micro` `hx` `helix` | U+F0DC8 | 󰷈 | 其他编辑器 |
 | `zsh*` `bash*` `fish*` `dash*` `sh` `shell` | U+F489 |  | shell |
 
-所有字形都需要 Nerd Font. U+EC82 和 U+EC81 是 codicons 的 `claude` 和 `openai` 字形, 较旧的 Nerd Font 版本没有.
+所有字形都需要 Nerd Font. U+EC82 和 U+EC81 是 codicons 的 `claude` 和 `openai` 字形, 较旧的 Nerd Font 版本没有. 没有模式匹配的程序使用默认图标; `tmux-autoname status` 会打印它的 Activity, 你可以把它加入 `@tmux-autoname-icons`.
 
 `@tmux-autoname-icons` 是用空白分隔的 `pattern=icon` 对, 每一对在第一个 `=` 处拆分. 图标不能包含空白. 你的条目排在内置表之前, 所以也可以覆盖内置表:
 
 ```tmux
-set -g @tmux-autoname-icons 'emerge=󰏗 python*=X'
+set -g @tmux-autoname-icons 'frob*=󰏗 python*=X'
 set -g @tmux-autoname-icon-default '·'
 ```
 
