@@ -100,8 +100,9 @@ UTF-8, and tests compare against bytes built with `printf` octal escapes):
 | Patterns | Codepoint | Meaning |
 |---|---|---|
 | `nvim*` `vim*` `vi` | U+E62B | vim |
-| `claude*` | U+273B (✻) | Claude Code |
-| `codex*` `opencode*` `pi` | U+F06A9 | other agents |
+| `claude*` | U+EC82 (codicons `claude`) | Claude Code |
+| `codex*` | U+EC81 (codicons `openai`) | Codex |
+| `opencode*` `pi` | U+F06A9 | other agents |
 | `ssh*` `mosh*` | U+F08C0 | remote |
 | `btop*` `htop*` `top` | U+F035B | system monitor |
 | `python*` `ipython*` | U+E606 | python |

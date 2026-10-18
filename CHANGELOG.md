@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Changed:**
+
+- `claude*` gets the codicons `claude` glyph U+EC82 instead of U+273B
+  (✻), and `codex*` the codicons `openai` glyph U+EC81 instead of the
+  robot. U+273B is not in most Nerd Fonts, so the terminal drew it from a
+  fallback font. Every built-in icon now needs a Nerd Font. To keep the
+  old glyphs, set `@tmux-autoname-icons 'claude*=✻ codex*=󰚩'`.
+
 **Fixed:**
 
 - The zsh integration did nothing in the first pane of a new tmux server.

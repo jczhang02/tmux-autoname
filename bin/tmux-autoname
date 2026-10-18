@@ -281,8 +281,9 @@ icon_for() {
   done
   case "$1" in
     nvim* | vim* | vi) printf '%s' '' ;;
-    claude*) printf '%s' '✻' ;;
-    codex* | opencode* | pi) printf '%s' '󰚩' ;;
+    claude*) printf '%s' '' ;;
+    codex*) printf '%s' '' ;;
+    opencode* | pi) printf '%s' '󰚩' ;;
     ssh* | mosh*) printf '%s' '󰣀' ;;
     btop* | htop* | top) printf '%s' '󰍛' ;;
     python* | ipython*) printf '%s' '' ;;

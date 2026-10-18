@@ -24,7 +24,8 @@ export SHELL=/bin/sh
 
 # Built-in icons, as UTF-8 bytes.
 ICON_VIM=$(printf '\356\230\253')         # U+E62B
-ICON_CLAUDE=$(printf '\342\234\273')      # U+273B
+ICON_CLAUDE=$(printf '\356\262\202')      # U+EC82
+ICON_CODEX=$(printf '\356\262\201')       # U+EC81
 ICON_AGENT=$(printf '\363\260\232\251')   # U+F06A9
 ICON_REMOTE=$(printf '\363\260\243\200')  # U+F08C0
 ICON_MONITOR=$(printf '\363\260\215\233') # U+F035B
@@ -504,7 +505,7 @@ test_node_script_resolves_to_program() {
   wait_cmd node
   sync_now
   assert_name "node running a CLI script resolves to the script name" 'codex'
-  assert_icon "the resolved program picks the icon" "$ICON_AGENT"
+  assert_icon "the resolved program picks the icon" "$ICON_CODEX"
   stop_server
 }
 
@@ -540,7 +541,7 @@ test_builtin_icons() {
   icon_case zsh "$ICON_SHELL" 2
   icon_case nvim "$ICON_VIM" 3
   icon_case vi "$ICON_VIM" 4
-  icon_case codex "$ICON_AGENT" 5
+  icon_case codex "$ICON_CODEX" 5
   icon_case htop "$ICON_MONITOR" 6
   icon_case ipython "$ICON_PYTHON" 7
   icon_case lazygit "$ICON_GIT" 8

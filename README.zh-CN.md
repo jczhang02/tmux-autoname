@@ -122,8 +122,9 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 | 模式 | 码位 | 字形 | 含义 |
 |---|---|---|---|
 | `nvim*` `vim*` `vi` | U+E62B |  | vim |
-| `claude*` | U+273B | ✻ | Claude Code |
-| `codex*` `opencode*` `pi` | U+F06A9 | 󰚩 | 其他 Agent |
+| `claude*` | U+EC82 |  | Claude Code |
+| `codex*` | U+EC81 |  | Codex (OpenAI) |
+| `opencode*` `pi` | U+F06A9 | 󰚩 | 其他 Agent |
 | `ssh*` `mosh*` | U+F08C0 | 󰣀 | 远程 |
 | `btop*` `htop*` `top` | U+F035B | 󰍛 | 系统监视器 |
 | `python*` `ipython*` | U+E606 |  | python |
@@ -132,7 +133,7 @@ source ~/.tmux/plugins/tmux-autoname/integrations/tmux-autoname.zsh
 | `man` `less` `bat` | U+F0219 | 󰈙 | 分页器 |
 | `zsh*` `bash*` `fish*` `dash*` `sh` `shell` | U+F489 |  | shell |
 
-除 U+273B 外, 所有字形都需要 Nerd Font.
+所有字形都需要 Nerd Font. U+EC82 和 U+EC81 是 codicons 的 `claude` 和 `openai` 字形, 较旧的 Nerd Font 版本没有.
 
 `@tmux-autoname-icons` 是用空白分隔的 `pattern=icon` 对, 每一对在第一个 `=` 处拆分. 图标不能包含空白. 你的条目排在内置表之前, 所以也可以覆盖内置表:
 

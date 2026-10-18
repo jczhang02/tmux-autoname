@@ -179,8 +179,9 @@ icon too.
 | Patterns | Codepoint | Glyph | Meaning |
 |---|---|---|---|
 | `nvim*` `vim*` `vi` | U+E62B |  | vim |
-| `claude*` | U+273B | ✻ | Claude Code |
-| `codex*` `opencode*` `pi` | U+F06A9 | 󰚩 | other agents |
+| `claude*` | U+EC82 |  | Claude Code |
+| `codex*` | U+EC81 |  | Codex (OpenAI) |
+| `opencode*` `pi` | U+F06A9 | 󰚩 | other agents |
 | `ssh*` `mosh*` | U+F08C0 | 󰣀 | remote |
 | `btop*` `htop*` `top` | U+F035B | 󰍛 | system monitor |
 | `python*` `ipython*` | U+E606 |  | python |
@@ -189,7 +190,8 @@ icon too.
 | `man` `less` `bat` | U+F0219 | 󰈙 | pager |
 | `zsh*` `bash*` `fish*` `dash*` `sh` `shell` | U+F489 |  | shell |
 
-All glyphs except U+273B need a Nerd Font.
+All glyphs need a Nerd Font. U+EC82 and U+EC81 are the codicons
+`claude` and `openai` glyphs, which older Nerd Font releases lack.
 
 `@tmux-autoname-icons` holds whitespace-separated `pattern=icon` pairs,
 each split at the first `=`. An icon cannot contain whitespace. Your
